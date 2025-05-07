@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -13,7 +14,8 @@ from .utils import (
     add_server_config,
     remove_server_config,
     list_available_servers,
-    list_configured_servers
+    list_configured_servers,
+    update_claude_desktop_config
 )
 
 def init_command(args):
@@ -30,8 +32,16 @@ def add_command(args):
     """Add a preconfigured MCP server to the local config."""
     server_name = args.mcp_name
     non_interactive = args.non_interactive if hasattr(args, 'non_interactive') else False
+    client = args.client if hasattr(args, 'client') else None
     
-    success, missing_env_vars = add_server_config(server_name, interactive=not non_interactive)
+    # Only save to .mcphub.json config when client is "default" or None
+    save_to_config = client is None or client == "default"
+    
+    success, missing_env_vars = add_server_config(
+        server_name, 
+        interactive=not non_interactive,
+        save_to_config=save_to_config
+    )
     
     if not success:
         print(f"Error: MCP server '{server_name}' not found in preconfigured servers")
@@ -42,7 +52,18 @@ def add_command(args):
             print(f"- {name}")
         sys.exit(1)
     
-    print(f"Added configuration for '{server_name}' to .mcphub.json")
+    if save_to_config:
+        print(f"Added configuration for '{server_name}' to .mcphub.json")
+    else:
+        print(f"Using '{server_name}' without saving to .mcphub.json")
+    
+    # Handle client integration
+    if client and client.lower() == "claude":
+        success, config_path = update_claude_desktop_config(server_name)
+        if success:
+            print(f"Updated Claude desktop configuration at: {config_path}")
+        else:
+            print("Failed to update Claude desktop configuration. Please check if the directory exists.")
     
     # Notify about missing environment variables
     if missing_env_vars:
@@ -51,8 +72,11 @@ def add_command(args):
             print(f"- {var}")
         print("\nYou can either:")
         print("1. Set them in your environment before using this server")
-        print("2. Run 'mcphub add-env' to add them to your configuration")
-        print("3. Edit .mcphub.json manually to set the values")
+        if save_to_config:
+            print("2. Run 'mcphub add-env' to add them to your configuration")
+            print("3. Edit .mcphub.json manually to set the values")
+        else:
+            print("2. Add --client default to save to .mcphub.json and set values there")
 
 def remove_command(args):
     """Remove an MCP server configuration from the local config."""
@@ -90,6 +114,60 @@ def list_command(args):
         else:
             print("  No preconfigured servers available")
 
+def run_command(args):
+    """Run an MCP server with optional SSE support."""
+    server_name = args.mcp_name
+    config = load_config()
+    
+    if server_name not in config.get("mcpServers", {}):
+        print(f"Error: MCP server '{server_name}' not found in configuration")
+        sys.exit(1)
+    
+    server_config = config["mcpServers"][server_name]
+    
+    # Build the command
+    cmd = []
+    
+    # Add SSE support if requested
+    if args.sse:
+        # Construct the stdio command based on server configuration
+        stdio_cmd = []
+        if "command" in server_config:
+            stdio_cmd.append(server_config["command"])
+        if "args" in server_config:
+            stdio_cmd.extend(server_config["args"])
+        
+        # If no command specified, use package_name with npx
+        if not stdio_cmd and "package_name" in server_config:
+            stdio_cmd = ["npx", "-y", server_config["package_name"]]
+        
+        # Join the stdio command parts
+        stdio_str = " ".join(stdio_cmd)
+        
+        cmd.extend([
+            "npx", "-y", "supergateway",
+            "--stdio", stdio_str,
+            "--port", str(args.port),
+            "--baseUrl", args.base_url,
+            "--ssePath", args.sse_path,
+            "--messagePath", args.message_path
+        ])
+    else:
+        # Use the server's configured command
+        if "command" in server_config:
+            cmd.append(server_config["command"])
+        if "args" in server_config:
+            cmd.extend(server_config["args"])
+    
+    try:
+        print(f"Running command: {' '.join(cmd)}")
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        print("\nServer stopped")
+    except Exception as e:
+        print(f"Error running server: {e}")
+        sys.exit(1)
+
 def parse_args(args=None):
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -118,6 +196,11 @@ def parse_args(args=None):
         action="store_true",
         help="Don't prompt for environment variables"
     )
+    add_parser.add_argument(
+        "--client",
+        choices=["claude", "default"],
+        help="Configure the MCP server for a specific client application. Use 'default' to explicitly save to .mcphub.json. If not specified or 'default', saves to .mcphub.json."
+    )
     
     # Remove command
     remove_parser = subparsers.add_parser(
@@ -140,6 +223,42 @@ def parse_args(args=None):
         help="Show all available preconfigured servers"
     )
     
+    # Run command
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run an MCP server with optional SSE support"
+    )
+    run_parser.add_argument(
+        "mcp_name",
+        help="Name of the MCP server to run"
+    )
+    run_parser.add_argument(
+        "--sse",
+        action="store_true",
+        help="Enable SSE support using supergateway"
+    )
+    run_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to run the server on (default: 8000)"
+    )
+    run_parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="Base URL for the server (default: http://localhost:8000)"
+    )
+    run_parser.add_argument(
+        "--sse-path",
+        default="/sse",
+        help="Path for SSE endpoint (default: /sse)"
+    )
+    run_parser.add_argument(
+        "--message-path",
+        default="/message",
+        help="Path for message endpoint (default: /message)"
+    )
+    
     return parser.parse_args(args)
 
 def main():
@@ -154,6 +273,8 @@ def main():
         remove_command(args)
     elif args.command == "list":
         list_command(args)
+    elif args.command == "run":
+        run_command(args)
     else:
         # Show help if no command is provided
         parse_args(["-h"])

@@ -175,8 +175,54 @@ Configure your MCP servers in `.mcphub.json`:
 ### Transport Support
 
 - **stdio Transport**: Run MCP servers as local subprocesses
+- **SSE Transport**: Run MCP servers with Server-Sent Events (SSE) support using supergateway
 - **Automatic Path Management**: Manages server paths and working directories
 - **Environment Variable Handling**: Configurable environment variables per server
+
+#### Running Servers with SSE Support
+
+You can run MCP servers with SSE support using the `mcphub run` command:
+
+```bash
+# Basic usage with default settings
+mcphub run your-server-name --sse
+
+# Advanced usage with custom settings
+mcphub run your-server-name --sse \
+    --port 8000 \
+    --base-url http://localhost:8000 \
+    --sse-path /sse \
+    --message-path /message
+```
+
+SSE support is useful when you need to:
+- Connect to MCP servers from web applications
+- Use real-time communication with MCP servers
+- Integrate with clients that support SSE
+
+The SSE server provides two endpoints:
+- `/sse`: SSE endpoint for real-time updates
+- `/message`: HTTP endpoint for sending messages
+
+Example configuration in `.mcphub.json`:
+```json
+{
+    "mcpServers": {
+        "sequential-thinking-mcp": {
+            "package_name": "smithery-ai/server-sequential-thinking",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@smithery-ai/server-sequential-thinking",
+                "--key",
+                "your-api-key"
+            ]
+        }
+    }
+}
+```
 
 ### Framework Integration
 
