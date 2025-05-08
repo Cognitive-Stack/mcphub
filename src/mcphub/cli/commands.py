@@ -209,6 +209,60 @@ def run_command(args):
         log_error("Error running server", e)
         sys.exit(1)
 
+def run_command(args):
+    """Run an MCP server with optional SSE support."""
+    server_name = args.mcp_name
+    config = load_config()
+    
+    if server_name not in config.get("mcpServers", {}):
+        print(f"Error: MCP server '{server_name}' not found in configuration")
+        sys.exit(1)
+    
+    server_config = config["mcpServers"][server_name]
+    
+    # Build the command
+    cmd = []
+    
+    # Add SSE support if requested
+    if args.sse:
+        # Construct the stdio command based on server configuration
+        stdio_cmd = []
+        if "command" in server_config:
+            stdio_cmd.append(server_config["command"])
+        if "args" in server_config:
+            stdio_cmd.extend(server_config["args"])
+        
+        # If no command specified, use package_name with npx
+        if not stdio_cmd and "package_name" in server_config:
+            stdio_cmd = ["npx", "-y", server_config["package_name"]]
+        
+        # Join the stdio command parts
+        stdio_str = " ".join(stdio_cmd)
+        
+        cmd.extend([
+            "npx", "-y", "supergateway",
+            "--stdio", stdio_str,
+            "--port", str(args.port),
+            "--baseUrl", args.base_url,
+            "--ssePath", args.sse_path,
+            "--messagePath", args.message_path
+        ])
+    else:
+        # Use the server's configured command
+        if "command" in server_config:
+            cmd.append(server_config["command"])
+        if "args" in server_config:
+            cmd.extend(server_config["args"])
+    
+    try:
+        print(f"Running command: {' '.join(cmd)}")
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        print("\nServer stopped")
+    except Exception as e:
+        print(f"Error running server: {e}")
+        sys.exit(1)
+
 def parse_args(args=None):
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -257,6 +311,42 @@ def parse_args(args=None):
     list_parser = subparsers.add_parser(
         "list", 
         help="List configured MCP servers"
+    )
+    
+    # Run command
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run an MCP server with optional SSE support"
+    )
+    run_parser.add_argument(
+        "mcp_name",
+        help="Name of the MCP server to run"
+    )
+    run_parser.add_argument(
+        "--sse",
+        action="store_true",
+        help="Enable SSE support using supergateway"
+    )
+    run_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to run the server on (default: 8000)"
+    )
+    run_parser.add_argument(
+        "--base-url",
+        default="http://localhost:8000",
+        help="Base URL for the server (default: http://localhost:8000)"
+    )
+    run_parser.add_argument(
+        "--sse-path",
+        default="/sse",
+        help="Path for SSE endpoint (default: /sse)"
+    )
+    run_parser.add_argument(
+        "--message-path",
+        default="/message",
+        help="Path for message endpoint (default: /message)"
     )
     
     # Run command
