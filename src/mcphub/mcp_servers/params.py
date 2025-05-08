@@ -1,12 +1,16 @@
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
+import openai
+import requests
+from urllib.parse import urlparse
 
 from mcp import StdioServerParameters
 
 from .exceptions import ServerConfigNotFoundError
-
+from .schemas import MCPServerConfigSchema
 
 @dataclass
 class MCPServerConfig:
@@ -25,6 +29,10 @@ class MCPServersParams:
     def __init__(self, config_path: Optional[str]):
         self.config_path = config_path
         self._servers_params = self._load_servers_params()
+        # Initialize OpenAI client if API key is available
+        self.openai_client = None
+        if os.getenv("OPENAI_API_KEY"):
+            self.openai_client = openai.OpenAI()
 
     @property
     def servers_params(self) -> List[MCPServerConfig]:
@@ -52,53 +60,133 @@ class MCPServersParams:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
 
-    def _load_predefined_servers_params(self) -> Dict:
-        """Load predefined server parameters from JSON file."""
-        commands_path = Path(__file__).parent.parent / "mcphub_preconfigured_servers.json"
-        if commands_path.exists():
-            with open(commands_path, "r") as f:
-                return json.load(f)
-        return {}
+    def _get_github_readme(self, repo_url: str) -> str:
+        """Fetch README content from GitHub repository."""
+        parsed_url = urlparse(repo_url)
+        if parsed_url.netloc != "github.com":
+            raise ValueError("Only GitHub repositories are supported")
+        
+        # Convert github.com URL to raw content URL
+        path_parts = parsed_url.path.strip("/").split("/")
+        if len(path_parts) != 2:
+            raise ValueError("Invalid GitHub repository URL")
+        
+        owner, repo = path_parts
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/README.md"
+        
+        response = requests.get(raw_url)
+        if response.status_code == 200:
+            return response.text
+        else:
+            # Try master branch if main doesn't exist
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/README.md"
+            response = requests.get(raw_url)
+            if response.status_code == 200:
+                return response.text
+            raise ValueError(f"Could not fetch README from {repo_url}")
+
+    def _parse_readme_with_openai(self, readme_content: str) -> Dict:
+        """Use OpenAI to parse README and extract MCP server configuration."""
+        if not self.openai_client:
+            raise ValueError("OpenAI API key not configured. Set OPENAI_API_KEY environment variable.")
+
+        prompt = f"""Please analyze this MCP server README and extract the configuration in JSON format.
+        The configuration should include:
+        - command: The command to run the server
+        - args: List of command line arguments
+        - env: Environment variables (if any)
+        - setup_script: Any setup script needed (if any)
+        
+        README content:
+        {readme_content}
+        
+        Return only the JSON configuration, nothing else."""
+
+        response = self.openai_client.responses.parse(
+            model="gpt-4o-mini",
+            input=[
+                {"role": "system", "content": "You are a helpful assistant that extracts MCP server configuration from READMEs."},
+                {"role": "user", "content": prompt}
+            ],
+            text_format=MCPServerConfigSchema
+        )
+        try:
+            config = response.output_parsed.model_dump()
+            return config
+        except json.JSONDecodeError:
+            raise ValueError("Failed to parse OpenAI response as JSON")
+
+    def add_server_from_repo(self, server_name: str, repo_url: str) -> None:
+        """Add a new server configuration by analyzing its GitHub repository README."""
+        try:
+            # Fetch README content
+            readme_content = self._get_github_readme(repo_url)
+            
+            # Parse README with OpenAI
+            config = self._parse_readme_with_openai(readme_content)
+            
+            # Create server configuration
+            server_config = MCPServerConfig(
+                package_name=server_name,
+                command=config["command"],
+                args=config["args"],
+                env=config.get("env", {}),
+                repo_url=repo_url,
+                setup_script=config.get("setup_script")
+            )
+            
+            # Add to existing configuration
+            self._servers_params[server_name] = server_config
+            
+            # Save to .mcphub.json
+            self._save_config()
+            
+        except Exception as e:
+            raise ValueError(f"Failed to add server from repository: {str(e)}")
+
+    def _save_config(self) -> None:
+        """Save current configuration to .mcphub.json."""
+        if not self.config_path:
+            raise ValueError("No configuration path specified")
+            
+        config = {"mcpServers": {}}
+        for server_name, server_params in self._servers_params.items():
+            config["mcpServers"][server_name] = {
+                "package_name": server_params.package_name,
+                "command": server_params.command,
+                "args": server_params.args,
+                "env": server_params.env,
+                "repo_url": server_params.repo_url,
+                "setup_script": server_params.setup_script
+            }
+            
+        with open(self.config_path, "w") as f:
+            json.dump(config, f, indent=4)
 
     def _load_servers_params(self) -> Dict[str, MCPServerConfig]:
         config = self._load_user_config()
-        predefined_servers_params = self._load_predefined_servers_params()
         servers = {}
         
         for mcp_name, server_config in config.items():
             package_name = server_config.get("package_name")
             
-            # Check if command and args are configured in user config
-            if "command" in server_config and "args" in server_config:
-                # Use configuration directly from .mcphub.json
-                servers[mcp_name] = MCPServerConfig(
-                    package_name=package_name,
-                    command=server_config["command"],
-                    args=server_config["args"],
-                    env=server_config.get("env", {}),
-                    description=server_config.get("description"),
-                    tags=server_config.get("tags"),
-                    repo_url=server_config.get("repo_url"),
-                    setup_script=server_config.get("setup_script")
-                )
-            # Fallback to predefined configuration
-            elif package_name and predefined_servers_params.get("mcpServers", {}).get(package_name):
-                cmd_info = predefined_servers_params["mcpServers"][package_name]
-                servers[mcp_name] = MCPServerConfig(
-                    package_name=package_name,
-                    command=cmd_info.get("command"),
-                    args=cmd_info.get("args", []),
-                    env=server_config.get("env", {}),
-                    description=cmd_info.get("description"),
-                    tags=cmd_info.get("tags"),
-                    repo_url=cmd_info.get("repo_url"),
-                    setup_script=cmd_info.get("setup_script")
-                )
-            else:
-                raise ServerConfigNotFoundError(
-                    f"Server '{package_name}' must either have command and args configured in .mcphub.json "
-                    f"or be defined in mcphub_preconfigured_servers.json"
-                )
+            if not package_name:
+                raise ValueError(f"package_name is required for server {mcp_name}")
+            
+            # Get command and args with defaults
+            command = server_config.get("command", "npx")
+            args = server_config.get("args", ["-y", package_name])
+                
+            servers[mcp_name] = MCPServerConfig(
+                package_name=package_name,
+                command=command,
+                args=args,
+                env=server_config.get("env", {}),
+                description=server_config.get("description"),
+                tags=server_config.get("tags"),
+                repo_url=server_config.get("repo_url"),
+                setup_script=server_config.get("setup_script")
+            )
         
         return servers
     

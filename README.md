@@ -49,6 +49,33 @@ Create a `.mcphub.json` file in your project root:
 }
 ```
 
+### Adding New MCP Servers
+
+You can add new MCP servers in two ways:
+
+1. **Manual Configuration**: Add the server configuration directly to your `.mcphub.json` file.
+
+2. **Automatic Configuration from GitHub**: Use the `add_server_from_repo` method to automatically configure a server from its GitHub repository:
+
+```python
+from mcphub import MCPHub
+
+# Initialize MCPHub
+hub = MCPHub()
+
+# Add a new server from GitHub
+hub.servers_params.add_server_from_repo(
+    server_name="my-server",
+    repo_url="https://github.com/username/repo"
+)
+```
+
+The automatic configuration:
+- Fetches the README from the GitHub repository
+- Uses OpenAI to analyze the README and extract the server configuration
+- Adds the configuration to your `.mcphub.json` file
+- Requires an OpenAI API key (set via `OPENAI_API_KEY` environment variable)
+
 ### Usage with OpenAI Agents
 
 ```python

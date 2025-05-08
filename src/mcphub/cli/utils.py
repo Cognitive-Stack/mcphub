@@ -4,6 +4,69 @@ import os
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
+from rich.console import Console
+from rich.theme import Theme
+from rich.logging import RichHandler
+from rich.panel import Panel
+from rich.live import Live
+from rich.table import Table
+from rich.prompt import Prompt, Confirm
+import logging
+
+# Initialize rich console with custom theme
+console = Console(theme=Theme({
+    "info": "cyan",
+    "warning": "yellow",
+    "error": "red bold",
+    "success": "green",
+    "command": "blue",
+    "step": "magenta",
+    "input": "bright_blue",
+}))
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=console, rich_tracebacks=True)]
+)
+
+logger = logging.getLogger("mcphub")
+
+def show_steps(steps: List[str], title: str = "Progress"):
+    """Show a list of steps with checkmarks."""
+    table = Table(show_header=False, box=None)
+    table.add_column("Status", style="green")
+    table.add_column("Step", style="step")
+    
+    for step in steps:
+        table.add_row("✓", step)
+    
+    console.print(Panel(table, title=title, border_style="blue"))
+
+def log_error(message: str, error: Exception = None):
+    """Log an error message with optional exception details."""
+    if error:
+        logger.error(f"{message}: {str(error)}", exc_info=error)
+    else:
+        logger.error(message)
+
+def log_warning(message: str):
+    """Log a warning message."""
+    logger.warning(message)
+
+def log_info(message: str):
+    """Log an info message."""
+    logger.info(message)
+
+def log_success(message: str):
+    """Log a success message."""
+    console.print(f"[success]✓ {message}[/]")
+
+def log_step(message: str):
+    """Log a step message."""
+    console.print(f"[step]→ {message}[/]")
 
 DEFAULT_CONFIG = {
     "mcpServers": {}
@@ -56,37 +119,77 @@ def detect_env_vars(server_config: Dict[str, Any]) -> List[str]:
     
     return env_vars
 
-def prompt_env_vars(env_vars: List[str]) -> Dict[str, str]:
-    """Prompt the user for environment variable values.
+def prompt_env_vars(env_vars: List[str], existing_values: Dict[str, str] = None) -> Dict[str, str]:
+    """Prompt user for environment variable values.
     
     Args:
         env_vars: List of environment variable names to prompt for
+        existing_values: Optional dictionary of existing values
         
     Returns:
         Dictionary mapping environment variable names to values
     """
-    values = {}
+    values = existing_values or {}
     
-    print("\nThis MCP server requires environment variables to be set.")
-    print("You can either:")
-    print("1. Enter values now (they will be saved in your .mcphub.json)")
-    print("2. Set them in your environment and press Enter to skip")
+    console.print("\n[info]Environment Variables Setup[/]")
+    console.print("[info]Please provide values for the following environment variables:[/]")
     
     for var in env_vars:
-        # Check if the environment variable is already set
-        existing_value = os.environ.get(var)
-        if existing_value:
-            prompt = f"Environment variable {var} found in environment. Press Enter to use it or provide a new value: "
-        else:
-            prompt = f"Enter value for {var} (or press Enter to skip): "
+        # Skip if already set in environment
+        if os.getenv(var):
+            console.print(f"[success]✓ {var} is already set in your environment[/]")
+            continue
+            
+        # Show existing value if any
+        current_value = values.get(var, "")
+        if current_value:
+            console.print(f"[info]Current value for {var}: {current_value}[/]")
+            
+        # Prompt for new value
+        value = Prompt.ask(
+            f"[input]Enter value for {var}[/]",
+            default=current_value,
+            show_default=True
+        )
         
-        value = input(prompt)
-        
-        # If user entered a value, save it
         if value:
             values[var] = value
-    
+            
     return values
+
+def validate_env_vars(env_vars: Dict[str, str]) -> bool:
+    """Validate environment variable values.
+    
+    Args:
+        env_vars: Dictionary of environment variable values
+        
+    Returns:
+        True if all values are valid, False otherwise
+    """
+    for var, value in env_vars.items():
+        if not value:
+            log_warning(f"Environment variable {var} is empty")
+            if not Confirm.ask(f"Do you want to continue without setting {var}?"):
+                return False
+    return True
+
+def save_env_vars_to_config(config: Dict[str, Any], server_name: str, env_vars: Dict[str, str]) -> None:
+    """Save environment variables to the server configuration.
+    
+    Args:
+        config: Configuration dictionary
+        server_name: Name of the server
+        env_vars: Dictionary of environment variable values
+    """
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+    if server_name not in config["mcpServers"]:
+        config["mcpServers"][server_name] = {}
+    if "env" not in config["mcpServers"][server_name]:
+        config["mcpServers"][server_name]["env"] = {}
+        
+    config["mcpServers"][server_name]["env"].update(env_vars)
+    save_config(config)
 
 def process_env_vars(server_config: Dict[str, Any], env_values: Dict[str, str]) -> Dict[str, Any]:
     """Process environment variables in a server configuration.
