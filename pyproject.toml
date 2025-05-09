@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcphub"
-version = "0.1.9"
+version = "0.1.10"
 description = "A Python package for managing and integrating Model Context Protocol (MCP) servers with AI frameworks like OpenAI Agents, LangChain, and Autogen"
 readme = "README.md"
 authors = [
