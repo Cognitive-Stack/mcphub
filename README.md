@@ -2,6 +2,13 @@
 
 MCPHub is an embeddable Model Context Protocol (MCP) solution for AI services. It enables seamless integration of MCP servers into any AI framework, allowing developers to easily configure, set up, and manage MCP servers within their applications. Whether you're using OpenAI Agents, LangChain, or Autogen, MCPHub provides a unified way to connect your AI services with MCP tools and resources.
 
+## Documentation
+
+- [CLI Documentation](src/mcphub/cli/README.md) - Command-line interface for managing MCP servers
+- [API Documentation](docs/api.md) - Python API reference
+- [Configuration Guide](docs/configuration.md) - Server configuration details
+- [Examples](docs/examples.md) - Usage examples and tutorials
+
 ## Quick Start
 
 ### Prerequisites
