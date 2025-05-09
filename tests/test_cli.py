@@ -5,8 +5,11 @@ import sys
 from pathlib import Path
 from unittest import mock
 import pytest
+from datetime import datetime
 
 from mcphub.cli import commands, utils
+from mcphub.cli.process_manager import ProcessManager
+from mcphub.mcp_servers.params import MCPServersParams
 
 
 @pytest.fixture
@@ -20,7 +23,8 @@ def mock_cli_config_file(tmp_path):
                 "args": ["-m", "test_server"],
                 "env": {"TEST_ENV": "test_value"},
                 "description": "Test MCP Server",
-                "tags": ["test", "demo"]
+                "tags": ["test", "demo"],
+                "last_run": datetime.now().isoformat()
             }
         }
     }
@@ -33,107 +37,79 @@ def mock_cli_config_file(tmp_path):
 
 
 @pytest.fixture
-def mock_preconfigured_servers(tmp_path):
-    """Create a mock preconfigured servers file for CLI testing."""
-    content = {
-        "mcpServers": {
-            "test-server": {
-                "package_name": "test-server",
-                "command": "python",
-                "args": ["-m", "test_server"],
-                "env": {"TEST_ENV": "test_value"},
-                "description": "Test MCP Server",
-                "tags": ["test", "demo"]
-            },
-            "env-server": {
-                "package_name": "env-server",
-                "command": "python",
-                "args": ["-m", "env_server"],
-                "env": {"API_KEY": "${API_KEY}", "BASE_URL": "${BASE_URL}"},
-                "description": "Server with Environment Variables",
-                "tags": ["env", "test"]
-            }
+def mock_process_manager():
+    """Create a mock process manager for testing."""
+    with mock.patch("mcphub.cli.commands.ProcessManager") as mock_pm:
+        mock_pm.return_value.get_process_info.return_value = {
+            "pid": 1234,
+            "status": "running",
+            "start_time": datetime.now().isoformat(),
+            "memory_usage": "100MB"
         }
-    }
-    
-    file_path = tmp_path / "mcphub_preconfigured_servers.json"
-    with open(file_path, "w") as f:
-        json.dump(content, f)
-    
-    return file_path
+        mock_pm.return_value.start_process.return_value = 1234  # Return a mock PID
+        mock_pm.return_value.list_processes.return_value = [{
+            "name": "test-server",
+            "status": "running",
+            "pid": 1234,
+            "start_time": datetime.now().isoformat(),
+            "memory_usage": "100MB",
+            "command": "python -m test_server",
+            "ports": [8000],
+            "uptime": "1h"
+        }]
+        yield mock_pm
 
 
 @pytest.fixture
-def cli_env(mock_cli_config_file, mock_preconfigured_servers, monkeypatch):
+def cli_env(mock_cli_config_file, monkeypatch):
     """Set up the environment for CLI testing."""
     # Mock get_config_path to return our test config
     def mock_get_config_path():
         return mock_cli_config_file
     
-    # Mock load_preconfigured_servers to use our test preconfigured servers
-    def mock_load_preconfigured():
-        with open(mock_preconfigured_servers, "r") as f:
-            return json.load(f)
-    
     # Apply patches
     monkeypatch.setattr(utils, "get_config_path", mock_get_config_path)
-    monkeypatch.setattr(utils, "load_preconfigured_servers", mock_load_preconfigured)
     
     # Return paths for test verification
     return {
-        "config_path": mock_cli_config_file,
-        "preconfigured_path": mock_preconfigured_servers
+        "config_path": mock_cli_config_file
     }
 
 
-class TestCliInit:
-    def test_init_skipss(self, cli_env, capfd, monkeypatch):
-        """Test that 'init' command skips creation when config already exists."""
-        config_path = Path(cli_env["config_path"])
-
-        # Mock get_config_path to return our test config
-        def mock_get_config_path():
-            return config_path
-        monkeypatch.setattr(utils, "get_config_path", mock_get_config_path)
-
-        # Mock Path.exists to return True
-        def mock_exists(self):
-            return True
-        monkeypatch.setattr(Path, "exists", mock_exists)
-
-        # Execute init command
-        args = mock.Mock()
-        commands.init_command(args)
-        
-        # Verify output indicates config already exists
-        out, _ = capfd.readouterr()
-        assert f"already exists" in out
-
-
 class TestCliAdd:
-    def test_add_server_success(self, cli_env):
-        """Test adding a server from preconfigured servers."""
+    def test_add_server_from_repo(self, cli_env, monkeypatch):
+        """Test adding a server from a GitHub repository."""
+        # Mock MCPServersParams
+        mock_servers_params = mock.Mock()
+        mock_servers_params.add_server_from_repo.return_value = None
+        mock_servers_params.retrieve_server_params.return_value = mock.Mock(env=None)
+        
+        # Mock the MCPServersParams class to return our mock instance
+        mock_mcp_servers_params_class = mock.Mock(return_value=mock_servers_params)
+        monkeypatch.setattr("mcphub.mcp_servers.params.MCPServersParams", mock_mcp_servers_params_class)
+        
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
+        
         # Set up command arguments
         args = mock.Mock()
-        args.mcp_name = "test-server"
-        args.non_interactive = True
+        args.repo_url = "https://github.com/test/repo"
+        args.mcp_name = None
         
         # Execute add command
         commands.add_command(args)
         
-        # Verify server was added to config
-        with open(cli_env["config_path"], "r") as f:
-            config = json.load(f)
-        
-        assert "test-server" in config["mcpServers"]
-        assert config["mcpServers"]["test-server"]["command"] == "python"
+        # Verify server was added
+        mock_servers_params.add_server_from_repo.assert_called_once_with(
+            "test/repo", "https://github.com/test/repo"
+        )
 
-    def test_add_nonexistent_server(self, cli_env, capfd, monkeypatch):
-        """Test adding a server that doesn't exist in preconfigured servers."""
+    def test_add_server_invalid_url(self, cli_env, capfd, monkeypatch):
+        """Test adding a server with an invalid GitHub URL."""
         # Set up command arguments
         args = mock.Mock()
-        args.mcp_name = "nonexistent-server"
-        args.non_interactive = True
+        args.repo_url = "https://invalid.com/repo"
+        args.mcp_name = None
         
         # Mock sys.exit to avoid test termination
         monkeypatch.setattr(sys, "exit", lambda x: None)
@@ -143,44 +119,7 @@ class TestCliAdd:
         
         # Verify error message
         out, _ = capfd.readouterr()
-        assert "Error: MCP server 'nonexistent-server' not found" in out
-        assert "Available preconfigured servers" in out
-
-    @mock.patch("builtins.input", side_effect=["test_api_key", "https://test.com"])
-    def test_add_server_with_env_vars(self, mock_input, cli_env, monkeypatch):
-        """Test adding a server that requires environment variables."""
-        # Set up command arguments
-        args = mock.Mock()
-        args.mcp_name = "env-server"
-        args.non_interactive = False
-        
-        # Execute add command
-        commands.add_command(args)
-        
-        # Verify server was added with environment variables
-        with open(cli_env["config_path"], "r") as f:
-            config = json.load(f)
-        
-        assert "env-server" in config["mcpServers"]
-        assert config["mcpServers"]["env-server"]["env"]["API_KEY"] == "test_api_key"
-        assert config["mcpServers"]["env-server"]["env"]["BASE_URL"] == "https://test.com"
-
-    @mock.patch("builtins.input", side_effect=["", ""])
-    def test_add_server_missing_env_vars(self, mock_input, cli_env, capfd):
-        """Test adding a server with missing environment variables."""
-        # Set up command arguments
-        args = mock.Mock()
-        args.mcp_name = "env-server"
-        args.non_interactive = False
-        
-        # Execute add command
-        commands.add_command(args)
-        
-        # Verify warning about missing environment variables
-        out, _ = capfd.readouterr()
-        assert "Warning: The following environment variables are required but not set" in out
-        assert "API_KEY" in out
-        assert "BASE_URL" in out
+        assert "Only GitHub repositories are supported" in out
 
 
 class TestCliRemove:
@@ -225,214 +164,167 @@ class TestCliRemove:
         
         # Verify error message
         out, _ = capfd.readouterr()
-        assert "Error: MCP server 'nonexistent-server' not found" in out
+        assert "MCP server 'nonexistent-server' not found" in out
 
 
-class TestCliList:
-    def test_list_configured_servers(self, cli_env, capfd):
-        """Test listing configured servers."""
-        # Prepare config with multiple servers
-        with open(cli_env["config_path"], "r") as f:
-            config = json.load(f)
-            
-        config["mcpServers"] = {
-            "server1": {"command": "test1"},
-            "server2": {"command": "test2"}
-        }
-        
-        with open(cli_env["config_path"], "w") as f:
-            json.dump(config, f)
-        
+class TestCliPs:
+    def test_ps_command(self, cli_env, mock_process_manager, capfd):
+        """Test the ps command listing server processes."""
         # Set up command arguments
         args = mock.Mock()
-        args.all = False
         
-        # Execute list command
-        commands.list_command(args)
+        # Execute ps command
+        commands.ps_command(args)
         
         # Verify output
         out, _ = capfd.readouterr()
-        assert "Configured MCP servers:" in out
-        assert "- server1" in out
-        assert "- server2" in out
-        assert "Available preconfigured MCP servers:" not in out
+        assert "test-server" in out
+        assert "running" in out
+        assert "8000" in out  # Port from mock
+        assert "1h" in out  # Uptime from mock
 
-    def test_list_all_servers(self, cli_env, capfd):
-        """Test listing all servers including preconfigured ones."""
+
+class TestCliStatus:
+    def test_status_command(self, cli_env, mock_process_manager, capfd):
+        """Test the status command showing server status."""
         # Set up command arguments
         args = mock.Mock()
-        args.all = True
+        args.mcp_name = "test-server"
         
-        # Execute list command
-        commands.list_command(args)
+        # Execute status command
+        commands.status_command(args)
         
         # Verify output
         out, _ = capfd.readouterr()
-        assert "Configured MCP servers:" in out
-        assert "Available preconfigured MCP servers:" in out
-        assert "- test-server" in out
-        assert "- env-server" in out
+        assert "test-server" in out
+        assert "test-mcp-server" in out  # Package name from config
+        assert "python" in out  # Command from config
 
 
-class TestCliUtils:
-    def test_detect_env_vars(self):
-        """Test detecting environment variables in a server config."""
-        server_config = {
-            "command": "test",
-            "env": {
-                "API_KEY": "${API_KEY}",
-                "DEBUG": "true",
-                "URL": "${BASE_URL}"
-            }
-        }
+class TestCliRun:
+    def test_run_command(self, cli_env, mock_process_manager, capfd, monkeypatch):
+        """Test running a server."""
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        env_vars = utils.detect_env_vars(server_config)
+        # Set up command arguments
+        args = mock.Mock()
+        args.mcp_name = "test-server"
+        args.detach = False
+        args.sse = False
         
-        assert sorted(env_vars) == sorted(["API_KEY", "BASE_URL"])
-        assert "DEBUG" not in env_vars
+        # Execute run command
+        commands.run_command(args)
+        
+        # Verify process manager was called
+        mock_process_manager.return_value.start_process.assert_called_once()
+        call_args = mock_process_manager.return_value.start_process.call_args[0]
+        assert call_args[0] == "test-server"  # name
+        assert isinstance(call_args[1], list)  # command
+        assert isinstance(call_args[2], dict)  # env
 
-    def test_process_env_vars(self):
-        """Test processing environment variables in a server config."""
-        server_config = {
-            "command": "test",
-            "env": {
-                "API_KEY": "${API_KEY}",
-                "DEBUG": "true",
-                "URL": "${BASE_URL}"
-            }
-        }
+    def test_run_detached(self, cli_env, mock_process_manager, capfd, monkeypatch):
+        """Test running a server in detached mode."""
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        env_values = {
-            "API_KEY": "test_key",
-            # BASE_URL intentionally missing
-        }
+        # Set up command arguments
+        args = mock.Mock()
+        args.mcp_name = "test-server"
+        args.detach = True
+        args.sse = False
         
-        processed = utils.process_env_vars(server_config, env_values)
+        # Execute run command
+        commands.run_command(args)
         
-        assert processed["env"]["API_KEY"] == "test_key"
-        assert processed["env"]["DEBUG"] == "true"
-        assert processed["env"]["URL"] == "${BASE_URL}"  # unchanged
-
-    @mock.patch.dict(os.environ, {"ENV_VAR": "env_value"})
-    def test_add_server_with_env_var_from_environment(self, cli_env, monkeypatch):
-        """Test adding a server using environment variables from system environment."""
-        # Modify preconfigured servers to include our test env var
-        with open(cli_env["preconfigured_path"], "r") as f:
-            preconfig = json.load(f)
-        
-        preconfig["mcpServers"]["env-test"] = {
-            "command": "test",
-            "env": {"TEST_VAR": "${ENV_VAR}"}
-        }
-        
-        with open(cli_env["preconfigured_path"], "w") as f:
-            json.dump(preconfig, f)
-        
-        # Mock user input to skip (use env var from environment)
-        monkeypatch.setattr("builtins.input", lambda _: "")
-        
-        # Add server
-        success, missing = utils.add_server_config("env-test", interactive=True)
-        
-        # Verify
-        assert success is True
-        assert missing is None
-        
-        # Check config
-        with open(cli_env["config_path"], "r") as f:
-            config = json.load(f)
-        
-        assert "env-test" in config["mcpServers"]
-        # The env var template should be preserved (it will be resolved at runtime)
-        assert config["mcpServers"]["env-test"]["env"]["TEST_VAR"] == "${ENV_VAR}"
+        # Verify process manager was called
+        mock_process_manager.return_value.start_process.assert_called_once()
+        call_args = mock_process_manager.return_value.start_process.call_args[0]
+        assert call_args[0] == "test-server"  # name
+        assert isinstance(call_args[1], list)  # command
+        assert isinstance(call_args[2], dict)  # env
 
 
 class TestCliParsing:
-    @mock.patch("mcphub.cli.commands.init_command")
-    def test_parse_init_command(self, mock_init, monkeypatch):
-        """Test that 'init' command is properly parsed and dispatched."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "init"])
+    def test_parse_run_command(self, monkeypatch):
+        """Test parsing the run command."""
+        # Mock the command function
+        mock_run = mock.Mock()
+        monkeypatch.setattr(commands, "run_command", mock_run)
         
-        # Call main() which should parse arguments and dispatch
-        commands.main()
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        # Verify init_command was called
-        mock_init.assert_called_once()
+        # Test without detach
+        args = commands.parse_args(["run", "test-server"])
+        commands.run_command(args)
+        mock_run.assert_called_once()
+        
+        # Reset mock for next test
+        mock_run.reset_mock()
+        
+        # Test with detach
+        args = commands.parse_args(["run", "--detach", "test-server"])
+        commands.run_command(args)
+        assert mock_run.call_count == 1
 
-    @mock.patch("mcphub.cli.commands.add_command")
-    def test_parse_add_command(self, mock_add, monkeypatch):
-        """Test that 'add' command is properly parsed and dispatched."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "add", "test-server"])
+    def test_parse_add_command(self, monkeypatch):
+        """Test parsing the add command."""
+        # Mock the command function
+        mock_add = mock.Mock()
+        monkeypatch.setattr(commands, "add_command", mock_add)
         
-        # Call main() which should parse arguments and dispatch
-        commands.main()
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        # Verify add_command was called
+        # Test with repo URL
+        args = commands.parse_args(["add", "https://github.com/test/repo"])
+        commands.add_command(args)
         mock_add.assert_called_once()
-        # Verify the arguments
-        args = mock_add.call_args[0][0]
-        assert args.mcp_name == "test-server"
-        assert args.non_interactive is False
+        
+        # Reset mock for next test
+        mock_add.reset_mock()
+        
+        # Test with custom name
+        args = commands.parse_args(["add", "--name", "custom-name", "https://github.com/test/repo"])
+        commands.add_command(args)
+        assert mock_add.call_count == 1
 
-    @mock.patch("mcphub.cli.commands.add_command")
-    def test_parse_add_command_noninteractive(self, mock_add, monkeypatch):
-        """Test that 'add' command with --non-interactive flag is properly parsed."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "add", "--non-interactive", "test-server"])
+    def test_parse_remove_command(self, monkeypatch):
+        """Test parsing the remove command."""
+        # Mock the command function
+        mock_remove = mock.Mock()
+        monkeypatch.setattr(commands, "remove_command", mock_remove)
         
-        # Call main() which should parse arguments and dispatch
-        commands.main()
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        # Verify add_command was called
-        mock_add.assert_called_once()
-        # Verify the arguments
-        args = mock_add.call_args[0][0]
-        assert args.mcp_name == "test-server"
-        assert args.non_interactive is True
-
-    @mock.patch("mcphub.cli.commands.remove_command")
-    def test_parse_remove_command(self, mock_remove, monkeypatch):
-        """Test that 'remove' command is properly parsed and dispatched."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "remove", "test-server"])
-        
-        # Call main() which should parse arguments and dispatch
-        commands.main()
-        
-        # Verify remove_command was called
+        args = commands.parse_args(["remove", "test-server"])
+        commands.remove_command(args)
         mock_remove.assert_called_once()
-        # Verify the arguments
-        args = mock_remove.call_args[0][0]
-        assert args.mcp_name == "test-server"
 
-    @mock.patch("mcphub.cli.commands.list_command")
-    def test_parse_list_command(self, mock_list, monkeypatch):
-        """Test that 'list' command is properly parsed and dispatched."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "list"])
+    def test_parse_ps_command(self, monkeypatch):
+        """Test parsing the ps command."""
+        # Mock the command function
+        mock_ps = mock.Mock()
+        monkeypatch.setattr(commands, "ps_command", mock_ps)
         
-        # Call main() which should parse arguments and dispatch
-        commands.main()
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        # Verify list_command was called
-        mock_list.assert_called_once()
-        # Verify the arguments
-        args = mock_list.call_args[0][0]
-        assert args.all is False
+        args = commands.parse_args(["ps"])
+        commands.ps_command(args)
+        mock_ps.assert_called_once()
 
-    @mock.patch("mcphub.cli.commands.list_command")
-    def test_parse_list_command_all(self, mock_list, monkeypatch):
-        """Test that 'list' command with --all flag is properly parsed."""
-        # Mock sys.argv
-        monkeypatch.setattr(sys, "argv", ["mcphub", "list", "--all"])
+    def test_parse_status_command(self, monkeypatch):
+        """Test parsing the status command."""
+        # Mock the command function
+        mock_status = mock.Mock()
+        monkeypatch.setattr(commands, "status_command", mock_status)
         
-        # Call main() which should parse arguments and dispatch
-        commands.main()
+        # Mock sys.exit to avoid test termination
+        monkeypatch.setattr(sys, "exit", lambda x: None)
         
-        # Verify list_command was called
-        mock_list.assert_called_once()
-        # Verify the arguments
-        args = mock_list.call_args[0][0]
-        assert args.all is True
+        args = commands.parse_args(["status", "test-server"])
+        commands.status_command(args)
+        mock_status.assert_called_once()

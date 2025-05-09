@@ -49,3 +49,5 @@ __pycache__/
 
 # cache dir
 .mcphub_cache/
+
+.coverage

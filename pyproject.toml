@@ -55,3 +55,4 @@ mcphub = "mcphub.cli.commands:main"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
 pytest-asyncio = "^0.26.0"
+pytest-cov = "^6.1.1"

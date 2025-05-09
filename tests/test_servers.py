@@ -43,8 +43,6 @@ class TestMCPServers:
         # Create a patched MCPServersParams class that doesn't attempt to read from disk
         with mock.patch('mcphub.mcp_servers.params.MCPServersParams._load_user_config', 
                         return_value=config_content.get('mcpServers', {})), \
-             mock.patch('mcphub.mcp_servers.params.MCPServersParams._load_predefined_servers_params', 
-                       return_value={}), \
              mock.patch('pathlib.Path.unlink'):  # Mock unlink to prevent file deletion errors
             
             params = MCPServersParams(str(temp_config_file))
@@ -116,9 +114,7 @@ class TestMCPServers:
                             "env": {"TEST_ENV": "test_value"},
                             "repo_url": "https://github.com/test/repo.git",
                             "setup_script": "npm install"
-                        }}), \
-             mock.patch('mcphub.mcp_servers.params.MCPServersParams._load_predefined_servers_params',
-                       return_value={}):
+                        }}):
             
             params = MCPServersParams(str(temp_config_file))
             

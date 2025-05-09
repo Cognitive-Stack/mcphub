@@ -197,14 +197,6 @@ def save_config(config: Dict[str, Any]) -> None:
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
 
-def load_preconfigured_servers() -> Dict[str, Any]:
-    """Load the preconfigured servers from mcphub_preconfigured_servers.json."""
-    preconfigured_path = Path(__file__).parent.parent / "mcphub_preconfigured_servers.json"
-    if preconfigured_path.exists():
-        with open(preconfigured_path, "r") as f:
-            return json.load(f)
-    return {"mcpServers": {}}
-
 def detect_env_vars(server_config: Dict[str, Any]) -> List[str]:
     """Detect environment variables in a server configuration.
     
@@ -345,49 +337,6 @@ def process_env_vars(server_config: Dict[str, Any]) -> Dict[str, Any]:
     config["env"] = new_env
     return config
 
-def add_server_config(name: str, interactive: bool = True) -> Tuple[bool, Optional[List[str]]]:
-    """Add a preconfigured server to the local config.
-    
-    Args:
-        name: Name of the preconfigured server to add
-        interactive: Whether to prompt for environment variables
-        
-    Returns:
-        Tuple of (success, missing_env_vars):
-          - success: True if the server was added, False if it wasn't found
-          - missing_env_vars: List of environment variables that weren't set (None if no env vars needed)
-    """
-    preconfigured = load_preconfigured_servers()
-    if name not in preconfigured.get("mcpServers", {}):
-        return False, None
-    
-    # Get the server config
-    server_config = preconfigured["mcpServers"][name]
-    
-    # Detect environment variables
-    env_vars = detect_env_vars(server_config)
-    missing_env_vars = []
-    
-    # Process environment variables if needed
-    if env_vars and interactive:
-        found_vars = prompt_env_vars(env_vars)
-        server_config = process_env_vars(server_config)
-        
-        # Check for missing environment variables
-        for var in env_vars:
-            if var not in found_vars:
-                missing_env_vars.append(var)
-    
-    # Save to config
-    config = load_config()
-    if "mcpServers" not in config:
-        config["mcpServers"] = {}
-    
-    config["mcpServers"][name] = server_config
-    save_config(config)
-    
-    return True, missing_env_vars if missing_env_vars else None
-
 def remove_server_config(name: str) -> bool:
     """Remove a server config from the local .mcphub.json file.
     
@@ -403,11 +352,6 @@ def remove_server_config(name: str) -> bool:
         save_config(config)
         return True
     return False
-
-def list_available_servers() -> Dict[str, Any]:
-    """List all available preconfigured servers."""
-    preconfigured = load_preconfigured_servers()
-    return preconfigured.get("mcpServers", {})
 
 def list_configured_servers() -> Dict[str, Any]:
     """List all servers in the local config."""
