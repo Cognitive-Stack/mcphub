@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = ["pydantic (>=2.11.4,<3.0.0)", "rich (>=14.0.0,<15.0.0)", "openai (>=1.78.0,<2.0.0)"]
+dependencies = ["pydantic (>=2.11.4,<3.0.0)", "rich (>=14.0.0,<15.0.0)", "openai (>=1.78.0,<2.0.0)", "psutil (>=7.0.0,<8.0.0)"]
 requires-python = "<4.0,>=3.10"
 
 [project.optional-dependencies]

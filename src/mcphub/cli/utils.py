@@ -11,7 +11,17 @@ from rich.panel import Panel
 from rich.live import Live
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.syntax import Syntax
+from rich.live import Live
+from rich.text import Text
+import time
 import logging
+import sys
+import subprocess
+import psutil
+import socket
+from datetime import datetime
 
 # Initialize rich console with custom theme
 console = Console(theme=Theme({
@@ -22,6 +32,12 @@ console = Console(theme=Theme({
     "command": "blue",
     "step": "magenta",
     "input": "bright_blue",
+    "help": "dim",
+    "status": "bright_green",
+    "code": "bright_black",
+    "check": "green",
+    "pending": "yellow",
+    "current": "cyan",
 }))
 
 # Configure logging
@@ -34,6 +50,49 @@ logging.basicConfig(
 
 logger = logging.getLogger("mcphub")
 
+def show_animated_checklist(steps: List[str], title: str = "Progress"):
+    """Show an animated checklist of steps."""
+    def generate_checklist(completed_steps: int) -> Table:
+        table = Table(show_header=False, box=None)
+        table.add_column("Status", style="check", width=3)
+        table.add_column("Step", style="step")
+        
+        for i, step in enumerate(steps):
+            if i < completed_steps:
+                status = "✓"
+                style = "check"
+            elif i == completed_steps:
+                status = "⟳"
+                style = "current"
+            else:
+                status = "○"
+                style = "pending"
+            table.add_row(status, step)
+        
+        return Panel(table, title=title, border_style="blue")
+    
+    with Live(generate_checklist(0), refresh_per_second=4) as live:
+        for i in range(len(steps) + 1):
+            live.update(generate_checklist(i))
+            if i < len(steps):
+                time.sleep(0.5)  # Simulate work being done
+
+def show_progress(steps: List[str], title: str = "Progress"):
+    """Show a progress bar with steps."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        tasks = {}
+        for step in steps:
+            task = progress.add_task(f"[cyan]{step}", total=100)
+            tasks[step] = task
+            progress.update(task, completed=100)
+            progress.refresh()
+
 def show_steps(steps: List[str], title: str = "Progress"):
     """Show a list of steps with checkmarks."""
     table = Table(show_header=False, box=None)
@@ -44,6 +103,54 @@ def show_steps(steps: List[str], title: str = "Progress"):
         table.add_row("✓", step)
     
     console.print(Panel(table, title=title, border_style="blue"))
+
+def show_help_text(command: str, description: str, examples: List[str] = None):
+    """Show help text for a command."""
+    console.print(f"\n[help]Command: {command}[/]")
+    console.print(f"[help]Description: {description}[/]")
+    
+    if examples:
+        console.print("\n[help]Examples:[/]")
+        for example in examples:
+            console.print(f"[code]$ {example}[/]")
+
+def show_error(message: str, error: Exception = None, help_text: str = None):
+    """Show an error message with optional exception details and help text."""
+    console.print(f"\n[error]Error: {message}[/]")
+    if error:
+        console.print(f"[error]Details: {str(error)}[/]")
+    if help_text:
+        console.print(f"\n[help]{help_text}[/]")
+
+def show_warning(message: str, help_text: str = None):
+    """Show a warning message with optional help text."""
+    console.print(f"\n[warning]Warning: {message}[/]")
+    if help_text:
+        console.print(f"\n[help]{help_text}[/]")
+
+def show_success(message: str, details: str = None):
+    """Show a success message with optional details."""
+    console.print(f"\n[success]✓ {message}[/]")
+    if details:
+        console.print(f"[info]{details}[/]")
+
+def show_status(server_name: str, status: str, details: Dict[str, Any] = None):
+    """Show server status information."""
+    table = Table(title=f"Server Status: {server_name}")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="status")
+    
+    table.add_row("Status", status)
+    if details:
+        for key, value in details.items():
+            table.add_row(key, str(value))
+    
+    console.print(table)
+
+def show_code_block(code: str, language: str = "bash"):
+    """Show a code block with syntax highlighting."""
+    syntax = Syntax(code, language, theme="monokai")
+    console.print(syntax)
 
 def log_error(message: str, error: Exception = None):
     """Log an error message with optional exception details."""
@@ -77,12 +184,12 @@ def get_config_path() -> Path:
     return Path.cwd() / ".mcphub.json"
 
 def load_config() -> Dict[str, Any]:
-    """Load the config file if it exists, otherwise return an empty config dict."""
+    """Load the config file if it exists, otherwise create a new one."""
     config_path = get_config_path()
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            return json.load(f)
-    return DEFAULT_CONFIG
+    if not config_path.exists():
+        save_config(DEFAULT_CONFIG)
+    with open(config_path, "r") as f:
+        return json.load(f)
 
 def save_config(config: Dict[str, Any]) -> None:
     """Save the config to the .mcphub.json file."""
@@ -119,84 +226,89 @@ def detect_env_vars(server_config: Dict[str, Any]) -> List[str]:
     
     return env_vars
 
-def prompt_env_vars(env_vars: List[str], existing_values: Dict[str, str] = None) -> Dict[str, str]:
-    """Prompt user for environment variable values.
+def check_env_var(var: str) -> Optional[str]:
+    """Check if an environment variable exists and return its value.
     
     Args:
-        env_vars: List of environment variable names to prompt for
-        existing_values: Optional dictionary of existing values
+        var: Environment variable name
         
     Returns:
-        Dictionary mapping environment variable names to values
+        The value of the environment variable if it exists, None otherwise
     """
-    values = existing_values or {}
+    try:
+        # Use subprocess to run echo command and capture output
+        result = subprocess.run(
+            f"echo ${var}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        value = result.stdout.strip()
+        # If echo returns empty or the variable name, the variable doesn't exist
+        if not value or value == f"${var}":
+            return None
+        return value
+    except Exception:
+        return None
+
+def prompt_env_vars(env_vars: List[str]) -> Dict[str, str]:
+    """Check and prompt for environment variables.
     
-    console.print("\n[info]Environment Variables Setup[/]")
-    console.print("[info]Please provide values for the following environment variables:[/]")
+    Args:
+        env_vars: List of environment variable names to check
+        
+    Returns:
+        Dictionary of environment variable values that were found
+    """
+    found_vars = {}
+    missing_vars = []
+    
+    console.print("\n[info]Checking Environment Variables[/]")
     
     for var in env_vars:
-        # Skip if already set in environment
-        if os.getenv(var):
-            console.print(f"[success]✓ {var} is already set in your environment[/]")
-            continue
-            
-        # Show existing value if any
-        current_value = values.get(var, "")
-        if current_value:
-            console.print(f"[info]Current value for {var}: {current_value}[/]")
-            
-        # Prompt for new value
-        value = Prompt.ask(
-            f"[input]Enter value for {var}[/]",
-            default=current_value,
-            show_default=True
-        )
-        
+        # Check if variable exists
+        value = check_env_var(var)
         if value:
-            values[var] = value
+            console.print(f"[success]✓ Found {var} in environment[/]")
+            found_vars[var] = value
+        else:
+            console.print(f"[warning]✗ {var} not found in environment[/]")
+            missing_vars.append(var)
+    
+    # If there are missing variables, prompt user to set them
+    if missing_vars:
+        console.print("\n[info]Please set the following environment variables:[/]")
+        for var in missing_vars:
+            console.print(f"\n[code]export {var}=<value>[/]")
+            console.print(f"[code]echo ${var}[/]")
             
-    return values
-
-def validate_env_vars(env_vars: Dict[str, str]) -> bool:
-    """Validate environment variable values.
+            # Prompt for confirmation
+            if not Confirm.ask(f"Have you set {var}?"):
+                show_warning(
+                    f"Environment variable {var} is required",
+                    "Please set it using export before continuing"
+                )
+                sys.exit(1)
+            
+            # Check again after user confirmation
+            value = check_env_var(var)
+            if value:
+                console.print(f"[success]✓ Found {var} in environment[/]")
+                found_vars[var] = value
+            else:
+                show_error(
+                    f"Environment variable {var} is still not set",
+                    "Please make sure to set it correctly"
+                )
+                sys.exit(1)
     
-    Args:
-        env_vars: Dictionary of environment variable values
-        
-    Returns:
-        True if all values are valid, False otherwise
-    """
-    for var, value in env_vars.items():
-        if not value:
-            log_warning(f"Environment variable {var} is empty")
-            if not Confirm.ask(f"Do you want to continue without setting {var}?"):
-                return False
-    return True
+    return found_vars
 
-def save_env_vars_to_config(config: Dict[str, Any], server_name: str, env_vars: Dict[str, str]) -> None:
-    """Save environment variables to the server configuration.
-    
-    Args:
-        config: Configuration dictionary
-        server_name: Name of the server
-        env_vars: Dictionary of environment variable values
-    """
-    if "mcpServers" not in config:
-        config["mcpServers"] = {}
-    if server_name not in config["mcpServers"]:
-        config["mcpServers"][server_name] = {}
-    if "env" not in config["mcpServers"][server_name]:
-        config["mcpServers"][server_name]["env"] = {}
-        
-    config["mcpServers"][server_name]["env"].update(env_vars)
-    save_config(config)
-
-def process_env_vars(server_config: Dict[str, Any], env_values: Dict[str, str]) -> Dict[str, Any]:
+def process_env_vars(server_config: Dict[str, Any]) -> Dict[str, Any]:
     """Process environment variables in a server configuration.
     
     Args:
         server_config: Server configuration dict
-        env_values: Dictionary of environment variable values
         
     Returns:
         Updated server configuration with processed environment variables
@@ -215,12 +327,16 @@ def process_env_vars(server_config: Dict[str, Any], env_values: Dict[str, str]) 
         if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
             env_var = value[2:-1]  # Extract ENV_VAR from ${ENV_VAR}
             
-            # Use provided value or environment variable
-            if env_var in env_values:
-                new_env[key] = env_values[env_var]
+            # Check if variable exists in environment
+            env_value = check_env_var(env_var)
+            if env_value:
+                new_env[key] = env_value
             else:
-                # Keep the template if not provided
-                new_env[key] = value
+                show_error(
+                    f"Required environment variable {env_var} is not set",
+                    help_text=f"Please set it using: export {env_var}=<value>"
+                )
+                sys.exit(1)
         else:
             # Keep non-template values as is
             new_env[key] = value
@@ -254,12 +370,12 @@ def add_server_config(name: str, interactive: bool = True) -> Tuple[bool, Option
     
     # Process environment variables if needed
     if env_vars and interactive:
-        env_values = prompt_env_vars(env_vars)
-        server_config = process_env_vars(server_config, env_values)
+        found_vars = prompt_env_vars(env_vars)
+        server_config = process_env_vars(server_config)
         
         # Check for missing environment variables
         for var in env_vars:
-            if var not in env_values and var not in os.environ:
+            if var not in found_vars:
                 missing_env_vars.append(var)
     
     # Save to config
@@ -297,3 +413,159 @@ def list_configured_servers() -> Dict[str, Any]:
     """List all servers in the local config."""
     config = load_config()
     return config.get("mcpServers", {})
+
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is in use.
+    
+    Args:
+        port: Port number to check
+        
+    Returns:
+        bool: True if port is in use, False otherwise
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def get_process_uptime(pid: int) -> Optional[str]:
+    """Get the uptime of a process.
+    
+    Args:
+        pid: Process ID
+        
+    Returns:
+        str: Uptime in human readable format, or None if process not found
+    """
+    try:
+        process = psutil.Process(pid)
+        create_time = datetime.fromtimestamp(process.create_time())
+        uptime = datetime.now() - create_time
+        
+        # Format uptime
+        days = uptime.days
+        hours = uptime.seconds // 3600
+        minutes = (uptime.seconds % 3600) // 60
+        
+        if days > 0:
+            return f"{days}d {hours}h {minutes}m"
+        elif hours > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{minutes}m"
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+def get_server_status(server_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Get the status of a server including process details.
+    
+    Args:
+        server_config: Server configuration dict
+        
+    Returns:
+        Dict with status information:
+        {
+            "status": "Running" or "Not Running",
+            "pid": process ID or None,
+            "name": process name or None,
+            "command": full command or None,
+            "created": creation time or None,
+            "ports": list of ports or None,
+            "uptime": uptime string or None
+        }
+    """
+    status = {
+        "status": "Not Running",
+        "pid": None,
+        "name": None,
+        "command": None,
+        "created": None,
+        "ports": None,
+        "uptime": None
+    }
+    
+    # Get expected command and package name from config
+    expected_command = server_config.get("command", "")
+    expected_package = server_config.get("package_name", "")
+    expected_port = server_config.get("port", 3000)
+    
+    # First check for Docker containers
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}} {{.Ports}}"],
+            capture_output=True,
+            text=True
+        )
+        for line in result.stdout.splitlines():
+            if line.strip():
+                name, ports = line.split(" ", 1)
+                # Check if this container matches our server
+                if expected_command and expected_command in name:
+                    # Get container details
+                    inspect = subprocess.run(
+                        ["docker", "inspect", name],
+                        capture_output=True,
+                        text=True
+                    )
+                    if inspect.returncode == 0:
+                        status["status"] = "Running"
+                        status["name"] = f"docker:{name}"
+                        status["command"] = expected_command
+                        # Extract ports from docker ps output
+                        port_list = []
+                        for port in ports.split(", "):
+                            if "->" in port:
+                                host_port = port.split("->")[0].split(":")[-1]
+                                port_list.append(int(host_port))
+                        status["ports"] = port_list
+                        return status
+    except Exception:
+        pass
+    
+    # If no Docker match, check regular processes
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+        try:
+            cmdline = " ".join(proc.cmdline())
+            
+            # Check if this process matches our server
+            is_match = False
+            
+            # Check by command (exact match or contains)
+            if expected_command:
+                if expected_command in cmdline or cmdline in expected_command:
+                    is_match = True
+            
+            # Check by package name (for npm/npx processes)
+            if not is_match and expected_package:
+                # Check for npx or npm running the package
+                if f"npx {expected_package}" in cmdline or f"npm {expected_package}" in cmdline:
+                    is_match = True
+                # Check for direct package execution
+                elif expected_package in cmdline:
+                    is_match = True
+            
+            # Check by port
+            if not is_match:
+                try:
+                    for conn in proc.connections():
+                        if conn.laddr.port == expected_port:
+                            is_match = True
+                            break
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass
+            
+            if is_match:
+                status["status"] = "Running"
+                status["pid"] = proc.pid
+                status["name"] = proc.name()
+                status["command"] = cmdline
+                status["created"] = datetime.fromtimestamp(proc.create_time()).strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    status["ports"] = [conn.laddr.port for conn in proc.connections()]
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    status["ports"] = [expected_port]
+                status["uptime"] = get_process_uptime(proc.pid)
+                break
+                
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    
+    return status
