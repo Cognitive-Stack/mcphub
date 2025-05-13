@@ -67,8 +67,13 @@ def cli_env(mock_cli_config_file, monkeypatch):
     def mock_get_config_path():
         return mock_cli_config_file
     
+    # Mock Path.home to return a test home directory
+    def mock_home():
+        return Path(mock_cli_config_file).parent
+    
     # Apply patches
     monkeypatch.setattr(utils, "get_config_path", mock_get_config_path)
+    monkeypatch.setattr(Path, "home", mock_home)
     
     # Return paths for test verification
     return {

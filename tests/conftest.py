@@ -76,8 +76,13 @@ def mock_current_dir(monkeypatch, tmp_path, temp_config_file, mock_cache_dir):
     def mock_cwd():
         return Path(temp_config_file).parent
     
-    # Patch Path.cwd() to return our mock directory
+    # Create a function that returns the parent directory as home
+    def mock_home():
+        return Path(temp_config_file).parent
+    
+    # Patch Path.cwd() and Path.home() to return our mock directory
     monkeypatch.setattr(Path, "cwd", mock_cwd)
+    monkeypatch.setattr(Path, "home", mock_home)
     
     # Return the mock current directory
     return Path(temp_config_file).parent

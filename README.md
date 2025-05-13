@@ -37,7 +37,7 @@ pip install mcphub[all]       # Install all optional dependencies
 
 ### Configuration
 
-Create a `.mcphub.json` file in your project root:
+Create a global config file at `~/.mcphub/.mcphub.json`:
 
 ```json
 {
@@ -104,7 +104,7 @@ async def main():
     
     # Step 1: Initialize MCPHub
     # MCPHub will automatically:
-    # - Find .mcphub.json in your project
+    # - Use the global config at ~/.mcphub/.mcphub.json
     # - Load server configurations
     # - Set up servers (clone repos, run setup scripts if needed)
     hub = MCPHub()
@@ -159,12 +159,12 @@ if __name__ == "__main__":
 
 ### Server Configuration
 
-- **JSON-based Configuration**: Simple `.mcphub.json` configuration file
+- **JSON-based Configuration**: Simple global config file at `~/.mcphub/.mcphub.json`
 - **Environment Variable Support**: Use environment variables in configuration
 - **Predefined Servers**: Access to a growing list of pre-configured MCP servers
 - **Custom Server Support**: Easy integration of custom MCP servers
 
-Configure your MCP servers in `.mcphub.json`:
+Configure your MCP servers in `~/.mcphub/.mcphub.json`:
 
 ```json
 {

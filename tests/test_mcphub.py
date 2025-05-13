@@ -11,10 +11,12 @@ from mcphub.mcphub import MCPHub
 class TestMCPHub:
     @mock.patch('pathlib.Path.cwd')
     @mock.patch('pathlib.Path.exists')
-    def test_find_config_path_success(self, mock_exists, mock_cwd, temp_config_file):
+    @mock.patch('pathlib.Path.home')
+    def test_find_config_path_success(self, mock_home, mock_exists, mock_cwd, temp_config_file):
         """Test successfully finding config path."""
-        # Mock cwd and exists to find the config file
+        # Mock cwd, home and exists to find the config file
         mock_cwd.return_value = Path(temp_config_file).parent
+        mock_home.return_value = Path(temp_config_file).parent
         mock_exists.return_value = True
         
         # Initialize MCPHub which will call _find_config_path
@@ -25,10 +27,12 @@ class TestMCPHub:
     
     @mock.patch('pathlib.Path.cwd')
     @mock.patch('pathlib.Path.exists')
-    def test_find_config_path_failure(self, mock_exists, mock_cwd):
+    @mock.patch('pathlib.Path.home')
+    def test_find_config_path_failure(self, mock_home, mock_exists, mock_cwd):
         """Test failure to find config path."""
-        # Mock cwd and exists to not find the config file
+        # Mock cwd, home and exists to not find the config file
         mock_cwd.return_value = Path("/some/path")
+        mock_home.return_value = Path("/some/home")
         mock_exists.return_value = False
         
         # Initializing MCPHub should raise FileNotFoundError

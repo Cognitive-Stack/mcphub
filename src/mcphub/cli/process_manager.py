@@ -5,15 +5,26 @@ import psutil
 import subprocess
 import signal
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union, Set
 from datetime import datetime
 import logging
 import socket
+import time
 
 logger = logging.getLogger("mcphub")
 
+
 class ProcessManager:
-    """Manages MCP server processes and their metadata."""
+    """Manages MCP server processes and their metadata.
+    
+    This class handles process creation, monitoring, and cleanup for MCP servers.
+    It keeps track of running processes in a JSON file at ~/.mcphub/processes.json.
+    
+    Attributes:
+        data_dir: Directory to store process metadata
+        processes_file: Path to the processes.json file
+        processes: Dictionary of process metadata indexed by instance ID (name:port)
+    """
     
     def __init__(self, data_dir: Optional[Path] = None):
         """Initialize the process manager.
@@ -30,11 +41,15 @@ class ProcessManager:
         self._ensure_data_dir()
         self._load_processes()
     
-    def _ensure_data_dir(self):
+    # ==========================================
+    # Private Methods
+    # ==========================================
+    
+    def _ensure_data_dir(self) -> None:
         """Ensure the data directory exists."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
     
-    def _load_processes(self):
+    def _load_processes(self) -> None:
         """Load process metadata from file."""
         if self.processes_file.exists():
             with open(self.processes_file, "r") as f:
@@ -43,36 +58,23 @@ class ProcessManager:
             self.processes = {}
             self._save_processes()
     
-    def _save_processes(self):
+    def _save_processes(self) -> None:
         """Save process metadata to file."""
         with open(self.processes_file, "w") as f:
             json.dump(self.processes, f, indent=2)
     
-    def _check_port_conflict(self, port: int) -> Optional[Dict[str, Any]]:
-        """Check if a port is already in use by another process.
+    def _get_instance_id(self, name: str, port: int) -> str:
+        """Generate a unique instance ID for a server.
         
         Args:
-            port: Port to check
+            name: Server name
+            port: Server port
             
         Returns:
-            Process info dict if port is in use, None otherwise
+            Unique instance ID string
         """
-        for pid_str, info in self.processes.items():
-            try:
-                pid = int(pid_str)
-                process = psutil.Process(pid)
-                if process.is_running():
-                    ports = self._get_process_ports(process)
-                    if port in ports:
-                        return {
-                            "pid": pid,
-                            "name": info.get("name", "Unknown"),
-                            "command": info.get("command", "Unknown")
-                        }
-            except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
-                continue
-        return None
-
+        return f"{name}:{port}"
+    
     def _find_available_port(self, start_port: int = 3000, max_attempts: int = 100) -> int:
         """Find an available port starting from start_port.
         
@@ -82,6 +84,9 @@ class ProcessManager:
             
         Returns:
             Available port number
+            
+        Raises:
+            RuntimeError: If no available port is found after max_attempts
         """
         for port in range(start_port, start_port + max_attempts):
             try:
@@ -93,8 +98,94 @@ class ProcessManager:
                 continue
         
         raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
-
-    def start_process(self, name: str, command: List[str], env: Dict[str, str] = None) -> int:
+    
+    def _check_port_conflict(self, port: int) -> Optional[Dict[str, Any]]:
+        """Check if a port is already in use by another process.
+        
+        Args:
+            port: Port number to check
+            
+        Returns:
+            Process info dictionary if port is in use, None otherwise
+        """
+        for instance_id, process_info in self.processes.items():
+            if port in process_info.get("ports", []):
+                try:
+                    # Verify process is still running
+                    process = psutil.Process(process_info["pid"])
+                    if process.is_running():
+                        return process_info
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        return None
+    
+    def _get_process_ports(self, process: psutil.Process) -> List[int]:
+        """Get all ports used by a process.
+        
+        Args:
+            process: Process to check
+            
+        Returns:
+            List of port numbers
+        """
+        ports = set()
+        try:
+            for conn in process.connections(kind='inet'):
+                if conn.laddr:
+                    ports.add(conn.laddr.port)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        return sorted(list(ports))
+    
+    def _get_uptime(self, process: psutil.Process) -> str:
+        """Get the uptime of a process as a formatted string.
+        
+        Args:
+            process: Process to get uptime for
+            
+        Returns:
+            Formatted uptime string (e.g. "2 days, 01:23:45" or "00:01:30")
+        """
+        try:
+            create_time = datetime.fromtimestamp(process.create_time())
+            now = datetime.now()
+            uptime = now - create_time
+            
+            # Format as days, hours, minutes, seconds
+            days = uptime.days
+            seconds = uptime.seconds
+            hours, remainder = divmod(seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            
+            if days > 0:
+                return f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return "Unknown"
+    
+    def _clean_defunct_processes(self) -> None:
+        """Remove entries for processes that are no longer running."""
+        to_remove = []
+        for instance_id, info in self.processes.items():
+            try:
+                process = psutil.Process(info["pid"])
+                if not process.is_running():
+                    to_remove.append(instance_id)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                to_remove.append(instance_id)
+        
+        for instance_id in to_remove:
+            del self.processes[instance_id]
+        
+        if to_remove:
+            self._save_processes()
+    
+    # ==========================================
+    # Public Methods
+    # ==========================================
+    
+    def start_process(self, name: str, command: List[str], env: Optional[Dict[str, str]] = None) -> int:
         """Start a new MCP server process.
         
         Args:
@@ -104,6 +195,10 @@ class ProcessManager:
             
         Returns:
             Process ID of the started process
+            
+        Raises:
+            RuntimeError: If no available port is found
+            subprocess.SubprocessError: If the process fails to start
         """
         # Extract port from command if present
         port = None
@@ -150,13 +245,14 @@ class ProcessManager:
                     raise
         
         # Create process metadata
+        instance_id = self._get_instance_id(name, port)
         process_info = {
             "name": name,
             "command": " ".join(command),
             "start_time": datetime.now().isoformat(),
             "env": env or {},
             "pid": None,
-            "ports": [],
+            "ports": [port] if port else [],
             "status": "starting",
             "warnings": []
         }
@@ -178,31 +274,30 @@ class ProcessManager:
             # Check for port conflicts after process starts
             if port:
                 # Wait a moment for the process to start
-                import time
                 time.sleep(1)
                 
                 # Check if our process got the port
                 try:
-                    our_ports = self._get_process_ports(process)
-                    if port not in our_ports:
-                        process_info["warnings"].append(
-                            f"Port {port} is not available. The process may not be running correctly."
-                        )
+                    # For SSE mode, we trust the port from the command
+                    if "--stdio" in command:
+                        process_info["ports"] = [port]
+                    else:
+                        our_ports = self._get_process_ports(process)
+                        if port not in our_ports:
+                            process_info["warnings"].append(
+                                f"Port {port} is not available. The process may not be running correctly."
+                            )
                 except Exception as e:
                     logger.debug(f"Failed to check process ports: {e}")
             
-            # Store process info
-            self.processes[str(process.pid)] = process_info
+            # Store process info using instance ID
+            self.processes[instance_id] = process_info
             self._save_processes()
             
             return process.pid
             
         except Exception as e:
             logger.error(f"Failed to start process: {e}")
-            process_info["status"] = "failed"
-            process_info["error"] = str(e)
-            self.processes[str(process.pid)] = process_info
-            self._save_processes()
             raise
     
     def stop_process(self, pid: int) -> bool:
@@ -212,194 +307,124 @@ class ProcessManager:
             pid: Process ID to stop
             
         Returns:
-            True if process was stopped, False otherwise
+            True if the process was stopped, False otherwise
         """
-        pid_str = str(pid)
-        if pid_str not in self.processes:
-            return False
-        
         try:
-            # Try graceful shutdown first
-            os.kill(pid, signal.SIGTERM)
+            process = psutil.Process(pid)
             
-            # Wait for process to terminate
+            # First try a graceful stop with SIGTERM
+            process.terminate()
+            
+            # Wait for the process to exit
             try:
-                process = psutil.Process(pid)
                 process.wait(timeout=5)
+                logger.info(f"Process {pid} stopped gracefully")
             except psutil.TimeoutExpired:
-                # Force kill if process doesn't terminate
-                os.kill(pid, signal.SIGKILL)
+                # Force kill if it doesn't exit in time
+                logger.warning(f"Process {pid} not responding to SIGTERM, sending SIGKILL")
+                process.kill()
             
-            # Update process info
-            self.processes[pid_str]["status"] = "stopped"
-            self.processes[pid_str]["stop_time"] = datetime.now().isoformat()
-            self._save_processes()
+            # Find and remove the process entry
+            instance_id_to_remove = None
+            for instance_id, info in self.processes.items():
+                if info["pid"] == pid:
+                    instance_id_to_remove = instance_id
+                    break
+            
+            if instance_id_to_remove:
+                del self.processes[instance_id_to_remove]
+                self._save_processes()
             
             return True
-            
-        except ProcessLookupError:
-            # Process already gone
-            self.processes[pid_str]["status"] = "stopped"
-            self.processes[pid_str]["stop_time"] = datetime.now().isoformat()
-            self._save_processes()
-            return True
+        except psutil.NoSuchProcess:
+            logger.warning(f"Process {pid} does not exist")
+            return False
         except Exception as e:
             logger.error(f"Failed to stop process {pid}: {e}")
             return False
     
     def get_process_info(self, pid: int) -> Optional[Dict[str, Any]]:
-        """Get information about a process.
+        """Get information about a specific process.
         
         Args:
-            pid: Process ID
+            pid: Process ID to query
             
         Returns:
             Process information dictionary or None if not found
         """
-        pid_str = str(pid)
-        if pid_str not in self.processes:
-            return None
+        # Find process info by PID
+        for instance_id, info in self.processes.items():
+            if info["pid"] == pid:
+                # Get stored info
+                info = info.copy()
+                
+                # Update with current info from psutil
+                try:
+                    process = psutil.Process(pid)
+                    if process.is_running():
+                        # Update status
+                        info["status"] = "running"
+                        
+                        # For non-SSE mode, update ports from process
+                        if "--stdio" not in info.get("command", ""):
+                            info["ports"] = self._get_process_ports(process)
+                        
+                        # Update uptime
+                        info["uptime"] = self._get_uptime(process)
+                        
+                        # Check for zombie state
+                        if process.status() == "zombie":
+                            info["status"] = "zombie"
+                            info["warnings"].append("Process is in zombie state")
+                    else:
+                        info["status"] = "not running"
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    info["status"] = "not running"
+                
+                return info
         
-        info = self.processes[pid_str].copy()
-        
-        try:
-            process = psutil.Process(pid)
-            
-            # Update runtime info
-            info["status"] = "running" if process.is_running() else "stopped"
-            info["uptime"] = self._get_uptime(process)
-            
-            # Get ports with retry for Docker containers
-            ports = self._get_process_ports(process)
-            if not ports and "docker" in info.get("command", "").lower():
-                # Retry after a short delay for Docker containers
-                import time
-                time.sleep(1)
-                ports = self._get_process_ports(process)
-            
-            info["ports"] = ports
-            
-            # Check for port conflicts
-            if ports:
-                for port in ports:
-                    conflict = self._check_port_conflict(port)
-                    if conflict and conflict["pid"] != pid:
-                        warning = (
-                            f"Port {port} is also in use by process {conflict['pid']} "
-                            f"({conflict['name']}): {conflict['command']}"
-                        )
-                        if warning not in info.get("warnings", []):
-                            if "warnings" not in info:
-                                info["warnings"] = []
-                            info["warnings"].append(warning)
-            
-            # Update process info
-            self.processes[pid_str].update(info)
-            self._save_processes()
-            
-        except psutil.NoSuchProcess:
-            info["status"] = "stopped"
-            info["stop_time"] = datetime.now().isoformat()
-            self.processes[pid_str].update(info)
-            self._save_processes()
-        
-        return info
+        return None
     
     def list_processes(self) -> List[Dict[str, Any]]:
-        """List all managed processes with their current status.
+        """List all MCP server processes.
         
         Returns:
             List of process information dictionaries
         """
-        processes = []
-        for pid_str, info in self.processes.items():
+        # Clean up defunct processes first
+        self._clean_defunct_processes()
+        
+        result = []
+        
+        # Get info for each process
+        for instance_id, info in self.processes.items():
             try:
-                pid = int(pid_str)
-                process_info = self.get_process_info(pid)
-                if process_info:
-                    processes.append(process_info)
-            except ValueError:
+                pid = info["pid"]
+                updated_info = self.get_process_info(pid)
+                if updated_info:
+                    # Add instance ID for reference
+                    updated_info["instance_id"] = instance_id
+                    result.append(updated_info)
+            except (ValueError, TypeError):
+                # Skip invalid PIDs
                 continue
-        return processes
-    
-    def _get_uptime(self, process: psutil.Process) -> str:
-        """Get process uptime in human readable format."""
-        try:
-            create_time = datetime.fromtimestamp(process.create_time())
-            uptime = datetime.now() - create_time
-            
-            days = uptime.days
-            hours = uptime.seconds // 3600
-            minutes = (uptime.seconds % 3600) // 60
-            
-            if days > 0:
-                return f"{days}d {hours}h {minutes}m"
-            elif hours > 0:
-                return f"{hours}h {minutes}m"
-            else:
-                return f"{minutes}m"
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return "N/A"
-    
-    def _get_process_ports(self, process: psutil.Process) -> List[int]:
-        """Get list of ports used by a process and its children.
         
-        Args:
-            process: Process to check
-            
+        return result
+    
+    def stop_all_processes(self) -> int:
+        """Stop all running MCP server processes.
+        
         Returns:
-            List of ports in use
+            Number of processes successfully stopped
         """
-        ports = set()
+        stopped_count = 0
         
-        try:
-            # Check the main process
-            for conn in process.connections():
-                if conn.laddr and conn.status == 'LISTEN':
-                    ports.add(conn.laddr.port)
-            
-            # Check child processes
-            for child in process.children(recursive=True):
-                try:
-                    for conn in child.connections():
-                        if conn.laddr and conn.status == 'LISTEN':
-                            ports.add(conn.laddr.port)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            # Check for Docker containers
-            if "docker" in process.name().lower():
-                try:
-                    # Get container ID from process command line
-                    cmdline = " ".join(process.cmdline())
-                    if "docker" in cmdline:
-                        # Extract container ID or name
-                        container_id = None
-                        for arg in process.cmdline():
-                            if arg.startswith("--name="):
-                                container_id = arg.split("=")[1]
-                                break
-                            elif arg.startswith("--cidfile="):
-                                with open(arg.split("=")[1], "r") as f:
-                                    container_id = f.read().strip()
-                                break
-                        
-                        if container_id:
-                            # Get container ports using docker inspect
-                            result = subprocess.run(
-                                ["docker", "inspect", "-f", "{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}", container_id],
-                                capture_output=True,
-                                text=True
-                            )
-                            if result.returncode == 0:
-                                for port_mapping in result.stdout.split():
-                                    if "->" in port_mapping:
-                                        host_port = port_mapping.split("->")[0].split(":")[-1]
-                                        ports.add(int(host_port))
-                except Exception as e:
-                    logger.debug(f"Failed to get Docker container ports: {e}")
-            
-            return sorted(list(ports))
-            
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return [] 
+        for info in self.processes.values():
+            try:
+                pid = info["pid"]
+                if self.stop_process(pid):
+                    stopped_count += 1
+            except (ValueError, TypeError):
+                continue
+        
+        return stopped_count 

@@ -41,8 +41,26 @@ Example:
 mcphub remove my-server
 ```
 
-### 3. List Servers (`ps`)
-List all configured MCP servers with detailed process information.
+### 3. List Configured Servers (`list` or `ls`)
+List all MCP servers configured in your local configuration file.
+
+```bash
+mcphub list
+# or
+mcphub ls
+```
+
+Shows:
+- Server name
+- Command
+- Package name
+- Repository URL
+- Number of environment variables
+
+This command provides a quick overview of your configured servers without process details.
+
+### 4. List Running Processes (`ps`)
+List all configured MCP servers with detailed process information, plus any detected MCP processes that aren't configured.
 
 ```bash
 mcphub ps
@@ -50,13 +68,17 @@ mcphub ps
 
 Shows:
 - Server name
-- Status (running/not running)
+- Status (running/not running/zombie)
+- PID
 - Ports
 - Command
 - Creation time
 - Uptime
+- Any detected MCP processes not in configuration
 
-### 4. Check Server Status (`status`)
+This command helps you track all MCP related processes running on your system, even those not configured in MCPHub.
+
+### 5. Check Server Status (`status`)
 Show detailed status information for a specific MCP server.
 
 ```bash
@@ -68,7 +90,7 @@ Example:
 mcphub status my-server
 ```
 
-### 5. Run a Server (`run`)
+### 6. Run a Server (`run`)
 Run a configured MCP server with optional SSE support.
 
 ```bash
@@ -89,25 +111,99 @@ mcphub run my-server --sse --port 3001
 
 ## Configuration File
 
-The CLI uses a `.mcphub.json` configuration file in your project directory. Here's an example structure:
+MCPHub uses a global configuration file located at `~/.mcphub/.mcphub.json`. This file stores MCP server configurations, including commands, arguments, and environment variables.
 
+Example configuration:
 ```json
 {
   "mcpServers": {
-    "server-name": {
-      "package_name": "package-name",
-      "command": "command-to-run",
-      "args": ["arg1", "arg2"],
+    "sequential-thinking-mcp": {
+      "package_name": "smithery-ai/server-sequential-thinking",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@smithery/cli@latest",
+        "run",
+        "@smithery-ai/server-sequential-thinking"
+      ]
+    },
+    "azure-storage-mcp": {
+      "package_name": "mashriram/azure_mcp_server",
+      "repo_url": "https://github.com/mashriram/azure_mcp_server",
+      "command": "uv",
+      "args": ["run", "mcp_server_azure_cmd"],
+      "setup_script": "uv pip install -e .",
       "env": {
-        "ENV_VAR": "value"
-      },
-      "description": "Server description",
-      "tags": ["tag1", "tag2"],
-      "last_run": "timestamp"
+        "AZURE_STORAGE_CONNECTION_STRING": "${AZURE_STORAGE_CONNECTION_STRING}",
+        "AZURE_STORAGE_CONTAINER_NAME": "${AZURE_STORAGE_CONTAINER_NAME}",
+        "AZURE_STORAGE_BLOB_NAME": "${AZURE_STORAGE_BLOB_NAME}"
+      }
     }
   }
 }
 ```
+
+## CLI Code Architecture
+
+The MCPHub CLI is structured with a clean, modular design following professional Python coding patterns:
+
+### Module Structure
+
+- **commands.py**: Command-line arguments parsing and entry points
+- **handlers.py**: Implementation of command handlers
+- **process_manager.py**: Process management and monitoring
+- **utils.py**: Utility functions for configuration, UI, and logging
+- **__init__.py**: Package initialization
+
+### Component Responsibilities
+
+1. **Command Parser**
+   - Parses command-line arguments
+   - Routes to appropriate handlers
+
+2. **Command Handlers**
+   - Implements business logic for each command
+   - Manages command-specific functionality
+
+3. **Process Manager**
+   - Tracks and manages MCP server processes
+   - Handles process lifecycle (start, stop, monitor)
+   - Manages port allocation and conflict resolution
+   - Detects and monitors all MCP-related processes
+
+4. **Utilities**
+   - Configuration management
+   - Environment variable handling
+   - UI components for rich terminal output
+   - Logging functionality
+
+### Design Patterns
+
+The CLI implementation follows these design principles:
+
+- **Separation of concerns**: UI, business logic, and data management are separated
+- **Single responsibility**: Each module has a clear, focused purpose
+- **Type hinting**: Comprehensive type annotations for better IDE support and code quality
+- **Error handling**: Consistent error management and user feedback
+- **Resource management**: Clean handling of processes and files
+
+## Development
+
+To extend the CLI with new commands:
+
+1. Add new argument parser in `commands.py`
+2. Implement handler function in `handlers.py`
+3. Connect them in the `main()` function
+
+For process management features:
+- Extend the `ProcessManager` class in `process_manager.py`
+
+For UI and utility functions:
+- Add to the appropriate section in `utils.py`
+
+## Environment Variables
+
+MCPHub CLI can detect and prompt for environment variables required by MCP servers. Variables specified in the format `${VAR_NAME}` in the configuration file will be detected and processed.
 
 ## Features
 
@@ -118,7 +214,7 @@ The CLI uses a `.mcphub.json` configuration file in your project directory. Here
 - Environment variable management
 - GitHub repository integration
 - Detailed status reporting
-- Process monitoring and management
+- Process monitoring with detection of unconfigured MCP servers
 
 ## Error Handling
 

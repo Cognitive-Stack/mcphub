@@ -2,8 +2,15 @@
 import json
 import os
 import re
+import sys
+import time
+import logging
+import subprocess
+import psutil
+import socket
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Union
+from datetime import datetime
 from rich.console import Console
 from rich.theme import Theme
 from rich.logging import RichHandler
@@ -13,15 +20,11 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.syntax import Syntax
-from rich.live import Live
 from rich.text import Text
-import time
-import logging
-import sys
-import subprocess
-import psutil
-import socket
-from datetime import datetime
+
+# ==========================================
+# Console and Logging Setup
+# ==========================================
 
 # Initialize rich console with custom theme
 console = Console(theme=Theme({
@@ -50,141 +53,30 @@ logging.basicConfig(
 
 logger = logging.getLogger("mcphub")
 
-def show_animated_checklist(steps: List[str], title: str = "Progress"):
-    """Show an animated checklist of steps."""
-    def generate_checklist(completed_steps: int) -> Table:
-        table = Table(show_header=False, box=None)
-        table.add_column("Status", style="check", width=3)
-        table.add_column("Step", style="step")
-        
-        for i, step in enumerate(steps):
-            if i < completed_steps:
-                status = "✓"
-                style = "check"
-            elif i == completed_steps:
-                status = "⟳"
-                style = "current"
-            else:
-                status = "○"
-                style = "pending"
-            table.add_row(status, step)
-        
-        return Panel(table, title=title, border_style="blue")
-    
-    with Live(generate_checklist(0), refresh_per_second=4) as live:
-        for i in range(len(steps) + 1):
-            live.update(generate_checklist(i))
-            if i < len(steps):
-                time.sleep(0.5)  # Simulate work being done
+# ==========================================
+# Configuration Management
+# ==========================================
 
-def show_progress(steps: List[str], title: str = "Progress"):
-    """Show a progress bar with steps."""
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console
-    ) as progress:
-        tasks = {}
-        for step in steps:
-            task = progress.add_task(f"[cyan]{step}", total=100)
-            tasks[step] = task
-            progress.update(task, completed=100)
-            progress.refresh()
-
-def show_steps(steps: List[str], title: str = "Progress"):
-    """Show a list of steps with checkmarks."""
-    table = Table(show_header=False, box=None)
-    table.add_column("Status", style="green")
-    table.add_column("Step", style="step")
-    
-    for step in steps:
-        table.add_row("✓", step)
-    
-    console.print(Panel(table, title=title, border_style="blue"))
-
-def show_help_text(command: str, description: str, examples: List[str] = None):
-    """Show help text for a command."""
-    console.print(f"\n[help]Command: {command}[/]")
-    console.print(f"[help]Description: {description}[/]")
-    
-    if examples:
-        console.print("\n[help]Examples:[/]")
-        for example in examples:
-            console.print(f"[code]$ {example}[/]")
-
-def show_error(message: str, error: Exception = None, help_text: str = None):
-    """Show an error message with optional exception details and help text."""
-    console.print(f"\n[error]Error: {message}[/]")
-    if error:
-        console.print(f"[error]Details: {str(error)}[/]")
-    if help_text:
-        console.print(f"\n[help]{help_text}[/]")
-
-def show_warning(message: str, help_text: str = None):
-    """Show a warning message with optional help text."""
-    console.print(f"\n[warning]Warning: {message}[/]")
-    if help_text:
-        console.print(f"\n[help]{help_text}[/]")
-
-def show_success(message: str, details: str = None):
-    """Show a success message with optional details."""
-    console.print(f"\n[success]✓ {message}[/]")
-    if details:
-        console.print(f"[info]{details}[/]")
-
-def show_status(server_name: str, status: str, details: Dict[str, Any] = None):
-    """Show server status information."""
-    table = Table(title=f"Server Status: {server_name}")
-    table.add_column("Property", style="cyan")
-    table.add_column("Value", style="status")
-    
-    table.add_row("Status", status)
-    if details:
-        for key, value in details.items():
-            table.add_row(key, str(value))
-    
-    console.print(table)
-
-def show_code_block(code: str, language: str = "bash"):
-    """Show a code block with syntax highlighting."""
-    syntax = Syntax(code, language, theme="monokai")
-    console.print(syntax)
-
-def log_error(message: str, error: Exception = None):
-    """Log an error message with optional exception details."""
-    if error:
-        logger.error(f"{message}: {str(error)}", exc_info=error)
-    else:
-        logger.error(message)
-
-def log_warning(message: str):
-    """Log a warning message."""
-    logger.warning(message)
-
-def log_info(message: str):
-    """Log an info message."""
-    logger.info(message)
-
-def log_success(message: str):
-    """Log a success message."""
-    console.print(f"[success]✓ {message}[/]")
-
-def log_step(message: str):
-    """Log a step message."""
-    console.print(f"[step]→ {message}[/]")
-
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: Dict[str, Any] = {
     "mcpServers": {}
 }
 
 def get_config_path() -> Path:
-    """Get the path to the .mcphub.json config file."""
-    return Path.cwd() / ".mcphub.json"
+    """Get the path to the .mcphub.json config file.
+    
+    Returns:
+        Path to the config file
+    """
+    config_dir = Path.home() / ".mcphub"
+    config_dir.mkdir(exist_ok=True)
+    return config_dir / ".mcphub.json"
 
 def load_config() -> Dict[str, Any]:
-    """Load the config file if it exists, otherwise create a new one."""
+    """Load the config file if it exists, otherwise create a new one.
+    
+    Returns:
+        Config dictionary loaded from the config file
+    """
     config_path = get_config_path()
     if not config_path.exists():
         save_config(DEFAULT_CONFIG)
@@ -192,31 +84,43 @@ def load_config() -> Dict[str, Any]:
         return json.load(f)
 
 def save_config(config: Dict[str, Any]) -> None:
-    """Save the config to the .mcphub.json file."""
+    """Save the config to the .mcphub.json file.
+    
+    Args:
+        config: Config dictionary to save
+    """
     config_path = get_config_path()
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
 
-def detect_env_vars(server_config: Dict[str, Any]) -> List[str]:
-    """Detect environment variables in a server configuration.
+def list_configured_servers() -> Dict[str, Any]:
+    """List all servers in the local config.
+    
+    Returns:
+        Dictionary of server configurations from the local config
+    """
+    config = load_config()
+    return config.get("mcpServers", {})
+
+def remove_server_config(name: str) -> bool:
+    """Remove a server config from the local .mcphub.json file.
     
     Args:
-        server_config: Server configuration dict
+        name: Name of the server to remove
         
     Returns:
-        List of environment variable names found in the configuration
+        True if the server was removed, False if it wasn't in the config
     """
-    env_vars = []
-    
-    # Check if the server has env section
-    if "env" in server_config and isinstance(server_config["env"], dict):
-        for key, value in server_config["env"].items():
-            # Check if value is a template like ${ENV_VAR}
-            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                env_var = value[2:-1]  # Extract ENV_VAR from ${ENV_VAR}
-                env_vars.append(env_var)
-    
-    return env_vars
+    config = load_config()
+    if name in config.get("mcpServers", {}):
+        del config["mcpServers"][name]
+        save_config(config)
+        return True
+    return False
+
+# ==========================================
+# Environment Variable Utilities
+# ==========================================
 
 def check_env_var(var: str) -> Optional[str]:
     """Check if an environment variable exists and return its value.
@@ -242,6 +146,27 @@ def check_env_var(var: str) -> Optional[str]:
         return value
     except Exception:
         return None
+
+def detect_env_vars(server_config: Dict[str, Any]) -> List[str]:
+    """Detect environment variables in a server configuration.
+    
+    Args:
+        server_config: Server configuration dict
+        
+    Returns:
+        List of environment variable names found in the configuration
+    """
+    env_vars = []
+    
+    # Check if the server has env section
+    if "env" in server_config and isinstance(server_config["env"], dict):
+        for key, value in server_config["env"].items():
+            # Check if value is a template like ${ENV_VAR}
+            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+                env_var = value[2:-1]  # Extract ENV_VAR from ${ENV_VAR}
+                env_vars.append(env_var)
+    
+    return env_vars
 
 def prompt_env_vars(env_vars: List[str]) -> Dict[str, str]:
     """Check and prompt for environment variables.
@@ -337,26 +262,9 @@ def process_env_vars(server_config: Dict[str, Any]) -> Dict[str, Any]:
     config["env"] = new_env
     return config
 
-def remove_server_config(name: str) -> bool:
-    """Remove a server config from the local .mcphub.json file.
-    
-    Args:
-        name: Name of the server to remove
-        
-    Returns:
-        bool: True if the server was removed, False if it wasn't in the config
-    """
-    config = load_config()
-    if name in config.get("mcpServers", {}):
-        del config["mcpServers"][name]
-        save_config(config)
-        return True
-    return False
-
-def list_configured_servers() -> Dict[str, Any]:
-    """List all servers in the local config."""
-    config = load_config()
-    return config.get("mcpServers", {})
+# ==========================================
+# Network Utilities
+# ==========================================
 
 def is_port_in_use(port: int) -> bool:
     """Check if a port is in use.
@@ -365,7 +273,7 @@ def is_port_in_use(port: int) -> bool:
         port: Port number to check
         
     Returns:
-        bool: True if port is in use, False otherwise
+        True if port is in use, False otherwise
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
@@ -377,139 +285,242 @@ def get_process_uptime(pid: int) -> Optional[str]:
         pid: Process ID
         
     Returns:
-        str: Uptime in human readable format, or None if process not found
+        Uptime as string (formatted as "X days, HH:MM:SS") or None if process doesn't exist
     """
     try:
         process = psutil.Process(pid)
         create_time = datetime.fromtimestamp(process.create_time())
-        uptime = datetime.now() - create_time
+        now = datetime.now()
+        uptime = now - create_time
         
-        # Format uptime
+        # Format as days, hours, minutes, seconds
         days = uptime.days
-        hours = uptime.seconds // 3600
-        minutes = (uptime.seconds % 3600) // 60
+        seconds = uptime.seconds
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
         
         if days > 0:
-            return f"{days}d {hours}h {minutes}m"
-        elif hours > 0:
-            return f"{hours}h {minutes}m"
+            return f"{days} days, {hours:02}:{minutes:02}:{seconds:02}"
         else:
-            return f"{minutes}m"
+            return f"{hours:02}:{minutes:02}:{seconds:02}"
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return None
 
 def get_server_status(server_config: Dict[str, Any]) -> Dict[str, Any]:
-    """Get the status of a server including process details.
+    """Get the status of a server.
     
     Args:
         server_config: Server configuration dict
         
     Returns:
-        Dict with status information:
-        {
-            "status": "Running" or "Not Running",
-            "pid": process ID or None,
-            "name": process name or None,
-            "command": full command or None,
-            "created": creation time or None,
-            "ports": list of ports or None,
-            "uptime": uptime string or None
-        }
+        Dictionary with server status information
     """
-    status = {
+    # TODO: Implement actual status check
+    return {
         "status": "Not Running",
-        "pid": None,
-        "name": None,
-        "command": None,
-        "created": None,
-        "ports": None,
-        "uptime": None
+        "ports": [],
+        "uptime": "N/A",
+        "pid": None
     }
+
+# ==========================================
+# UI Components
+# ==========================================
+
+def show_animated_checklist(steps: List[str], title: str = "Progress") -> None:
+    """Show an animated checklist of steps.
     
-    # Get expected command and package name from config
-    expected_command = server_config.get("command", "")
-    expected_package = server_config.get("package_name", "")
-    expected_port = server_config.get("port", 3000)
+    Args:
+        steps: List of step descriptions
+        title: Title of the checklist panel
+    """
+    def generate_checklist(completed_steps: int) -> Panel:
+        table = Table(show_header=False, box=None)
+        table.add_column("Status", style="check", width=3)
+        table.add_column("Step", style="step")
+        
+        for i, step in enumerate(steps):
+            if i < completed_steps:
+                status = "✓"
+                style = "check"
+            elif i == completed_steps:
+                status = "⟳"
+                style = "current"
+            else:
+                status = "○"
+                style = "pending"
+            table.add_row(status, step)
+        
+        return Panel(table, title=title, border_style="blue")
     
-    # First check for Docker containers
-    try:
-        result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}} {{.Ports}}"],
-            capture_output=True,
-            text=True
-        )
-        for line in result.stdout.splitlines():
-            if line.strip():
-                name, ports = line.split(" ", 1)
-                # Check if this container matches our server
-                if expected_command and expected_command in name:
-                    # Get container details
-                    inspect = subprocess.run(
-                        ["docker", "inspect", name],
-                        capture_output=True,
-                        text=True
-                    )
-                    if inspect.returncode == 0:
-                        status["status"] = "Running"
-                        status["name"] = f"docker:{name}"
-                        status["command"] = expected_command
-                        # Extract ports from docker ps output
-                        port_list = []
-                        for port in ports.split(", "):
-                            if "->" in port:
-                                host_port = port.split("->")[0].split(":")[-1]
-                                port_list.append(int(host_port))
-                        status["ports"] = port_list
-                        return status
-    except Exception:
-        pass
+    with Live(generate_checklist(0), refresh_per_second=4) as live:
+        for i in range(len(steps) + 1):
+            live.update(generate_checklist(i))
+            if i < len(steps):
+                time.sleep(0.5)  # Simulate work being done
+
+def show_progress(steps: List[str], title: str = "Progress") -> None:
+    """Show a progress bar with steps.
     
-    # If no Docker match, check regular processes
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
-        try:
-            cmdline = " ".join(proc.cmdline())
-            
-            # Check if this process matches our server
-            is_match = False
-            
-            # Check by command (exact match or contains)
-            if expected_command:
-                if expected_command in cmdline or cmdline in expected_command:
-                    is_match = True
-            
-            # Check by package name (for npm/npx processes)
-            if not is_match and expected_package:
-                # Check for npx or npm running the package
-                if f"npx {expected_package}" in cmdline or f"npm {expected_package}" in cmdline:
-                    is_match = True
-                # Check for direct package execution
-                elif expected_package in cmdline:
-                    is_match = True
-            
-            # Check by port
-            if not is_match:
-                try:
-                    for conn in proc.connections():
-                        if conn.laddr.port == expected_port:
-                            is_match = True
-                            break
-                except (psutil.AccessDenied, psutil.NoSuchProcess):
-                    pass
-            
-            if is_match:
-                status["status"] = "Running"
-                status["pid"] = proc.pid
-                status["name"] = proc.name()
-                status["command"] = cmdline
-                status["created"] = datetime.fromtimestamp(proc.create_time()).strftime("%Y-%m-%d %H:%M:%S")
-                try:
-                    status["ports"] = [conn.laddr.port for conn in proc.connections()]
-                except (psutil.AccessDenied, psutil.NoSuchProcess):
-                    status["ports"] = [expected_port]
-                status["uptime"] = get_process_uptime(proc.pid)
-                break
-                
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+    Args:
+        steps: List of step descriptions
+        title: Title of the progress panel
+    """
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        tasks = {}
+        for step in steps:
+            task = progress.add_task(f"[cyan]{step}", total=100)
+            tasks[step] = task
+            progress.update(task, completed=100)
+            progress.refresh()
+
+def show_steps(steps: List[str], title: str = "Progress") -> None:
+    """Show a list of steps with checkmarks.
     
-    return status
+    Args:
+        steps: List of step descriptions
+        title: Title of the steps panel
+    """
+    table = Table(show_header=False, box=None)
+    table.add_column("Status", style="green")
+    table.add_column("Step", style="step")
+    
+    for step in steps:
+        table.add_row("✓", step)
+    
+    console.print(Panel(table, title=title, border_style="blue"))
+
+def show_help_text(command: str, description: str, examples: List[str] = None) -> None:
+    """Show help text for a command.
+    
+    Args:
+        command: Command name
+        description: Command description
+        examples: List of example commands
+    """
+    console.print(f"\n[help]Command: {command}[/]")
+    console.print(f"[help]Description: {description}[/]")
+    
+    if examples:
+        console.print("\n[help]Examples:[/]")
+        for example in examples:
+            console.print(f"[code]$ {example}[/]")
+
+def show_error(message: str, error: Exception = None, help_text: str = None) -> None:
+    """Show an error message with optional exception details and help text.
+    
+    Args:
+        message: Error message
+        error: Exception object
+        help_text: Additional help text
+    """
+    console.print(f"\n[error]Error: {message}[/]")
+    if error:
+        console.print(f"[error]Details: {str(error)}[/]")
+    if help_text:
+        console.print(f"\n[help]{help_text}[/]")
+
+def show_warning(message: str, help_text: str = None) -> None:
+    """Show a warning message with optional help text.
+    
+    Args:
+        message: Warning message
+        help_text: Additional help text
+    """
+    console.print(f"\n[warning]Warning: {message}[/]")
+    if help_text:
+        console.print(f"\n[help]{help_text}[/]")
+
+def show_success(message: str, details: str = None) -> None:
+    """Show a success message with optional details.
+    
+    Args:
+        message: Success message
+        details: Additional details
+    """
+    console.print(f"\n[success]✓ {message}[/]")
+    if details:
+        console.print(f"[info]{details}[/]")
+
+def show_status(server_name: str, status: str, details: Dict[str, Any] = None) -> None:
+    """Show server status information.
+    
+    Args:
+        server_name: Name of the server
+        status: Status of the server
+        details: Dictionary of additional details
+    """
+    table = Table(title=f"Server Status: {server_name}")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="status")
+    
+    table.add_row("Status", status)
+    if details:
+        for key, value in details.items():
+            table.add_row(key, str(value))
+    
+    console.print(table)
+
+def show_code_block(code: str, language: str = "bash") -> None:
+    """Show a code block with syntax highlighting.
+    
+    Args:
+        code: Code to display
+        language: Language for syntax highlighting
+    """
+    syntax = Syntax(code, language, theme="monokai")
+    console.print(syntax)
+
+# ==========================================
+# Logging Utilities
+# ==========================================
+
+def log_error(message: str, error: Exception = None) -> None:
+    """Log an error message with optional exception details.
+    
+    Args:
+        message: Error message
+        error: Exception object
+    """
+    if error:
+        logger.error(f"{message}: {str(error)}", exc_info=error)
+    else:
+        logger.error(message)
+
+def log_warning(message: str) -> None:
+    """Log a warning message.
+    
+    Args:
+        message: Warning message
+    """
+    logger.warning(message)
+
+def log_info(message: str) -> None:
+    """Log an info message.
+    
+    Args:
+        message: Info message
+    """
+    logger.info(message)
+
+def log_success(message: str) -> None:
+    """Log a success message.
+    
+    Args:
+        message: Success message
+    """
+    console.print(f"[success]✓ {message}[/]")
+
+def log_step(message: str) -> None:
+    """Log a step message.
+    
+    Args:
+        message: Step message
+    """
+    console.print(f"[step]→ {message}[/]")

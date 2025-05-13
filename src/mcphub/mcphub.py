@@ -23,12 +23,10 @@ class MCPHub:
         self.servers = MCPServers(self.servers_params)
 
     def _find_config_path(self) -> Optional[str]:
-        current_dir = Path.cwd()
-        for parent in [current_dir] + list(current_dir.parents):
-            config_path = parent / ".mcphub.json"
-            if config_path.exists():
-                return str(config_path)
-        raise FileNotFoundError("Configuration file '.mcphub.json' not found")
+        global_config = Path.home() / ".mcphub" / ".mcphub.json"
+        if global_config.exists():
+            return str(global_config)
+        raise FileNotFoundError("Global configuration file '~/.mcphub/.mcphub.json' not found")
 
     @property
     def openai_adapter(self) -> MCPOpenAIAgentsAdapter:
