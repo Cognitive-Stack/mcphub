@@ -1,5 +1,7 @@
 from pathlib import Path
 from unittest import mock
+from unittest.mock import mock_open
+import json
 
 import pytest
 
@@ -14,16 +16,28 @@ class TestMCPHub:
     @mock.patch('pathlib.Path.home')
     def test_find_config_path_success(self, mock_home, mock_exists, mock_cwd, temp_config_file):
         """Test successfully finding config path."""
-        # Mock cwd, home and exists to find the config file
-        mock_cwd.return_value = Path(temp_config_file).parent
-        mock_home.return_value = Path(temp_config_file).parent
+        # Mock the config file path
+        config_path = Path(temp_config_file)
+        
+        # Create parent directory
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write a basic config
+        with open(config_path, "w") as f:
+            json.dump({"mcpServers": {}}, f)
+        
+        # Mock path methods
+        mock_cwd.return_value = config_path.parent
+        mock_home.return_value = config_path.parent
         mock_exists.return_value = True
         
-        # Initialize MCPHub which will call _find_config_path
-        hub = MCPHub()
-        
-        # Test that server_params was initialized correctly
-        assert hub.servers_params is not None
+        # Mock open to return our config content
+        with mock.patch("builtins.open", mock_open(read_data=json.dumps({"mcpServers": {}}))):
+            # Initialize MCPHub which will call _find_config_path
+            hub = MCPHub()
+            
+            # Test that server_params was initialized correctly
+            assert hub.servers_params is not None
     
     @mock.patch('pathlib.Path.cwd')
     @mock.patch('pathlib.Path.exists')

@@ -60,8 +60,16 @@ class MCPServersParams:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
 
-    def _get_github_readme(self, repo_url: str) -> str:
-        """Fetch README content from GitHub repository."""
+    def _get_github_readme(self, repo_url: str, subdirectory: Optional[str] = None) -> str:
+        """Fetch README content from GitHub repository.
+        
+        Args:
+            repo_url: URL of the GitHub repository.
+            subdirectory: Optional subdirectory path within the repository.
+        
+        Returns:
+            The content of the README.md file.
+        """
         parsed_url = urlparse(repo_url)
         if parsed_url.netloc != "github.com":
             raise ValueError("Only GitHub repositories are supported")
@@ -72,18 +80,32 @@ class MCPServersParams:
             raise ValueError("Invalid GitHub repository URL")
         
         owner, repo = path_parts
-        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/README.md"
+        
+        # Construct the URL with subdirectory if provided
+        if subdirectory:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/{subdirectory}/README.md"
+        else:
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/README.md"
         
         response = requests.get(raw_url)
         if response.status_code == 200:
             return response.text
         else:
             # Try master branch if main doesn't exist
-            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/README.md"
+            if subdirectory:
+                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/{subdirectory}/README.md"
+            else:
+                raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/README.md"
+                
             response = requests.get(raw_url)
             if response.status_code == 200:
                 return response.text
-            raise ValueError(f"Could not fetch README from {repo_url}")
+                
+            # If both failed, tell user which URLs we tried
+            error_msg = f"Could not fetch README from {repo_url}"
+            if subdirectory:
+                error_msg += f" in subdirectory '{subdirectory}'"
+            raise ValueError(error_msg)
 
     def _parse_readme_with_openai(self, readme_content: str) -> Dict:
         """Use OpenAI to parse README and extract MCP server configuration."""
@@ -126,11 +148,17 @@ class MCPServersParams:
             # Catch-all for any other unexpected exceptions
             raise RuntimeError(f"Unexpected error while parsing OpenAI response: {e}")
 
-    def add_server_from_repo(self, server_name: str, repo_url: str) -> None:
-        """Add a new server configuration by analyzing its GitHub repository README."""
+    def add_server_from_repo(self, server_name: str, repo_url: str, subdirectory: Optional[str] = None) -> None:
+        """Add a new server configuration by analyzing its GitHub repository README.
+        
+        Args:
+            server_name: Name to use for the server in the configuration
+            repo_url: URL of the GitHub repository
+            subdirectory: Optional subdirectory path within the repository
+        """
         try:
             # Fetch README content
-            readme_content = self._get_github_readme(repo_url)
+            readme_content = self._get_github_readme(repo_url, subdirectory)
             
             # Parse README with OpenAI
             config = self._parse_readme_with_openai(readme_content)
@@ -142,7 +170,8 @@ class MCPServersParams:
                 args=config["args"],
                 env=config.get("env", {}),
                 repo_url=repo_url,
-                setup_script=config.get("setup_script")
+                setup_script=config.get("setup_script"),
+                cwd=None  # Working directory will be set when server is run
             )
             
             # Add to existing configuration

@@ -4,8 +4,9 @@ import time
 import os
 import psutil
 import subprocess
+import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 from datetime import datetime
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -48,22 +49,37 @@ def handle_add(repo_url: str, server_name: Optional[str] = None,
     
     # Extract server name from repo URL if not provided
     if not server_name:
-        # Extract username/repo from GitHub URL
+        # Parse GitHub URL to handle various formats including subdirectories
         parsed_url = urlparse(repo_url)
+        
         if parsed_url.netloc != "github.com":
             show_error(
                 "Only GitHub repositories are supported",
                 help_text="Please provide a valid GitHub repository URL"
             )
             sys.exit(1)
+            
+        # Split the path to handle different GitHub URL formats
         path_parts = parsed_url.path.strip("/").split("/")
-        if len(path_parts) != 2:
+        
+        # Standard repo URL: github.com/username/repo
+        if len(path_parts) == 2:
+            server_name = "/".join(path_parts)
+            actual_repo_url = repo_url
+        # Tree URL format: github.com/username/repo/tree/branch/path/to/subdir
+        elif len(path_parts) >= 5 and path_parts[2] == "tree":
+            username, repo = path_parts[0], path_parts[1]
+            server_name = path_parts[-1]  # Use the last directory name
+            # Use the base repo URL for fetching
+            actual_repo_url = f"https://github.com/{username}/{repo}"
+        else:
             show_error(
                 "Invalid GitHub repository URL",
-                help_text="URL should be in the format: https://github.com/username/repo"
+                help_text="URL should be in the format: https://github.com/username/repo or https://github.com/username/repo/tree/branch/path/to/dir"
             )
             sys.exit(1)
-        server_name = "/".join(path_parts)
+    else:
+        actual_repo_url = repo_url
     
     try:
         with Progress(
@@ -81,7 +97,7 @@ def handle_add(repo_url: str, server_name: Optional[str] = None,
             progress.update(task, advance=25)
             
             # Step 2: Fetching repository README
-            progress.update(task, description="[cyan]Fetching repository README")
+            progress.update(task, description="[cyan]Fetching repository README from " + actual_repo_url)
             config_path = get_config_path()
             
             # Create config file if it doesn't exist
@@ -102,7 +118,18 @@ def handle_add(repo_url: str, server_name: Optional[str] = None,
             
             # Step 4: Adding server configuration
             progress.update(task, description="[cyan]Adding server configuration")
-            servers_params.add_server_from_repo(server_name, repo_url)
+            # Extract the specific subdirectory path if in tree format
+            if "tree" in repo_url:
+                path_parts = urlparse(repo_url).path.strip("/").split("/")
+                tree_index = path_parts.index("tree") 
+                if tree_index + 2 < len(path_parts):  # Has subdirectory after branch
+                    # Get the path after the branch name
+                    subdirectory = "/".join(path_parts[tree_index+2:])
+                    servers_params.add_server_from_repo(server_name, actual_repo_url, subdirectory=subdirectory)
+                else:
+                    servers_params.add_server_from_repo(server_name, actual_repo_url)
+            else:
+                servers_params.add_server_from_repo(server_name, actual_repo_url)
             time.sleep(0.5)  # Simulate work
             progress.update(task, advance=25)
         
@@ -553,6 +580,10 @@ def handle_kill(pid: int, force: bool = False) -> None:
                 help_text="Use 'mcphub ps' to see running MCP servers"
             )
             sys.exit(1)
+            return  # This ensures we don't continue if process_info is None
+        
+        # Store process name before we potentially lose it
+        process_name = process_info.get("name", str(pid))
         
         time.sleep(0.5)  # Simulate work
         progress.update(task, advance=33)
@@ -593,5 +624,5 @@ def handle_kill(pid: int, force: bool = False) -> None:
     
     show_success(
         f"Successfully stopped MCP server process {pid}",
-        f"Server '{process_info['name']}' is no longer running"
+        f"Server '{process_name}' is no longer running"
     ) 

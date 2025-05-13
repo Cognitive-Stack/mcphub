@@ -21,7 +21,7 @@ def temp_data_dir(tmp_path):
 def mock_processes_file():
     """Mock the processes.json file."""
     return {
-        "1234": {
+        "test-server:3000": {
             "name": "test-server",
             "command": "python server.py --port 3000",
             "start_time": "2024-03-20T10:00:00",
@@ -125,13 +125,16 @@ def test_start_process_with_port(process_manager):
         mock_process = MagicMock()
         mock_process.pid = 1234
         mock_popen.return_value = mock_process
-        
+
         with patch.object(process_manager, "_check_port_conflict", return_value=None):
             with patch.object(process_manager, "_get_process_ports", return_value=[3000]):
                 pid = process_manager.start_process("test-server", command)
                 assert pid == 1234
-                assert str(pid) in process_manager.processes
-                assert process_manager.processes[str(pid)]["status"] == "running"
+                process_key = "test-server:3000"
+                assert process_key in process_manager.processes
+                assert process_manager.processes[process_key]["pid"] == pid
+                assert process_manager.processes[process_key]["status"] == "running"
+                assert process_manager.processes[process_key]["ports"] == [3000]
 
 def test_start_process_without_port(process_manager):
     """Test starting a process without a specified port."""
@@ -140,28 +143,47 @@ def test_start_process_without_port(process_manager):
         mock_process = MagicMock()
         mock_process.pid = 1234
         mock_popen.return_value = mock_process
-        
+
         with patch.object(process_manager, "_find_available_port", return_value=3000):
             with patch.object(process_manager, "_check_port_conflict", return_value=None):
                 with patch.object(process_manager, "_get_process_ports", return_value=[3000]):
                     pid = process_manager.start_process("test-server", command)
                     assert pid == 1234
-                    assert "--port" in process_manager.processes[str(pid)]["command"]
-                    assert "3000" in process_manager.processes[str(pid)]["command"]
+                    process_key = "test-server:3000"
+                    assert process_key in process_manager.processes
+                    assert process_manager.processes[process_key]["pid"] == pid
+                    assert process_manager.processes[process_key]["status"] == "running"
+                    assert process_manager.processes[process_key]["ports"] == [3000]
+                    assert "--port 3000" in process_manager.processes[process_key]["command"]
 
 def test_stop_process(process_manager, mock_processes_file):
     """Test stopping a running process."""
-    process_manager.processes = mock_processes_file.copy()
-    with patch("os.kill") as mock_kill:
-        with patch("psutil.Process") as mock_process:
-            mock_proc = MagicMock()
-            mock_process.return_value = mock_proc
-            mock_proc.wait.return_value = None
-            
-            result = process_manager.stop_process(1234)
-            assert result is True
-            assert process_manager.processes["1234"]["status"] == "stopped"
-            mock_kill.assert_called_once_with(1234, signal.SIGTERM)
+    process_key = "test-server:3000"
+    process_manager.processes = mock_processes_file.copy()  # Use the fixture data
+    
+    # Create a mock Process directly instead of patching psutil.Process.terminate
+    mock_proc = MagicMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = MagicMock(return_value=None)
+    
+    with patch("psutil.Process", return_value=mock_proc):
+        # Verify process exists before stopping
+        assert process_key in process_manager.processes
+        
+        # Store initial process count
+        initial_process_count = len(process_manager.processes)
+        
+        result = process_manager.stop_process(1234)
+        
+        # Verify result
+        assert result is True
+        
+        # Verify terminate was called
+        mock_proc.terminate.assert_called_once()
+        
+        # Verify process was removed
+        assert len(process_manager.processes) == initial_process_count - 1
+        assert process_key not in process_manager.processes
 
 def test_stop_process_not_found(process_manager):
     """Test stopping a non-existent process."""
@@ -180,6 +202,7 @@ def test_get_process_info(process_manager, mock_processes_file):
         assert info is not None
         assert info["name"] == "test-server"
         assert info["status"] == "running"
+        assert info["pid"] == 1234
 
 def test_get_process_info_not_found(process_manager):
     """Test getting information about a non-existent process."""
@@ -205,9 +228,9 @@ def test_get_uptime(process_manager):
         mock_proc = MagicMock()
         mock_proc.create_time.return_value = datetime.now().timestamp() - 3600  # 1 hour ago
         mock_process.return_value = mock_proc
-        
+
         uptime = process_manager._get_uptime(mock_proc)
-        assert "1h" in uptime
+        assert uptime.strip() == "01:00:00"
 
 def test_get_process_ports(process_manager):
     """Test getting ports used by a process."""
