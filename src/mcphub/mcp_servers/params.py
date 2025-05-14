@@ -47,7 +47,7 @@ class MCPServersParams:
         """Load user configuration from JSON file."""
         # If no config path is provided, return empty dict
         if not self.config_path:
-            return {}
+            raise ServerConfigNotFoundError("No configuration file path provided")
             
         try:
             with open(self.config_path, "r") as f:
@@ -188,8 +188,15 @@ class MCPServersParams:
                 )
             
             # Get command and args with defaults
-            command = server_config.get("command", "npx")
-            args = server_config.get("args", ["-y", package_name])
+            command = server_config.get("command", None)
+            args = server_config.get("args", None)
+            
+            # Skip if command or args is None
+            if command is None or args is None:
+                raise ValueError(
+                    f"Invalid server '{mcp_name}' configuration: command or args is None. "
+                    f"Command: {command}, Args: {args}"
+                )
                 
             servers[mcp_name] = MCPServerConfig(
                 package_name=package_name,
