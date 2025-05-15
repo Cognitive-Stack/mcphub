@@ -47,7 +47,7 @@ class MCPServersParams:
         """Load user configuration from JSON file."""
         # If no config path is provided, return empty dict
         if not self.config_path:
-            return {}
+            raise ServerConfigNotFoundError("No configuration file path provided")
             
         try:
             with open(self.config_path, "r") as f:
@@ -102,19 +102,29 @@ class MCPServersParams:
         
         Return only the JSON configuration, nothing else."""
 
-        response = self.openai_client.responses.parse(
-            model="gpt-4o-mini",
-            input=[
-                {"role": "system", "content": "You are a helpful assistant that extracts MCP server configuration from READMEs."},
-                {"role": "user", "content": prompt}
-            ],
-            text_format=MCPServerConfigSchema
-        )
         try:
+            response = self.openai_client.responses.parse(
+                model="gpt-4o-mini",
+                input=[
+                    {"role": "system", "content": "You are a helpful assistant that extracts MCP server configuration from READMEs."},
+                    {"role": "user", "content": prompt}
+                ],
+                text_format=MCPServerConfigSchema
+            )
+            # Validate response structure
+            if not hasattr(response, "output_parsed") or not hasattr(response.output_parsed, "model_dump"):
+                raise ValueError("Unexpected OpenAI API response format")
             config = response.output_parsed.model_dump()
             return config
-        except json.JSONDecodeError:
-            raise ValueError("Failed to parse OpenAI response as JSON")
+        except json.JSONDecodeError as e:
+            # Log the problematic response content for debugging
+            raise ValueError(f"Failed to parse OpenAI response as JSON: {e}")
+        except openai.error.OpenAIError as e:
+            # Log OpenAI-specific errors
+            raise RuntimeError(f"OpenAI API error: {e}")
+        except Exception as e:
+            # Catch-all for any other unexpected exceptions
+            raise RuntimeError(f"Unexpected error while parsing OpenAI response: {e}")
 
     def add_server_from_repo(self, server_name: str, repo_url: str) -> None:
         """Add a new server configuration by analyzing its GitHub repository README."""
@@ -171,11 +181,22 @@ class MCPServersParams:
             package_name = server_config.get("package_name")
             
             if not package_name:
-                raise ValueError(f"package_name is required for server {mcp_name}")
+                raise ValueError(
+                    f"Configuration for server '{mcp_name}' is missing the required 'package_name' field. "
+                    "As of the latest update, all server configurations must explicitly include a 'package_name'. "
+                    "Please update your configuration file to include this field."
+                )
             
             # Get command and args with defaults
-            command = server_config.get("command", "npx")
-            args = server_config.get("args", ["-y", package_name])
+            command = server_config.get("command", None)
+            args = server_config.get("args", None)
+            
+            # Skip if command or args is None
+            if command is None or args is None:
+                raise ValueError(
+                    f"Invalid server '{mcp_name}' configuration: command or args is None. "
+                    f"Command: {command}, Args: {args}"
+                )
                 
             servers[mcp_name] = MCPServerConfig(
                 package_name=package_name,
