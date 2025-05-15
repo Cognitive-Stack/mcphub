@@ -100,14 +100,15 @@ jobs:
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
     
+    - name: Set up PAT for pushing tags
+      run: git remote set-url origin https://hieutrtr:${{ secrets.GH_PAT }}@github.com/Cognitive-Stack/mcphub.git
+    
     - name: Create and push tag
       if: steps.check-tag.outputs.tag_exists == 'false'
       run: |
-        # Create a new tag with the version from pyproject.toml
         git tag -a "v${PACKAGE_VERSION}" -m "Release version ${PACKAGE_VERSION}"
-        # Push the tag to the remote repository
         git push origin "v${PACKAGE_VERSION}"
-        
+    
     - name: Build and publish
       env:
         PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
