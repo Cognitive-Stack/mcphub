@@ -2,7 +2,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal, Union
 import openai
 import requests
 from urllib.parse import urlparse
@@ -14,17 +14,32 @@ from .schemas import MCPServerConfigSchema
 
 @dataclass
 class MCPServerConfig:
+    """Base configuration class for MCP servers."""
     package_name: str
-    command: str
-    args: List[str]
-    env: Dict[str, str]
     server_name: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     repo_url: Optional[str] = None
     setup_script: Optional[str] = None
-    cwd: Optional[str] = None
-    
+
+@dataclass
+class MCPServerStdioConfig(MCPServerConfig):
+    """Configuration for MCP servers using stdio transport."""
+    command: str
+    args: List[str] = None
+    env: Dict[str, str] = None
+    cwd: Optional[str | Path] = None
+    encoding: str = "utf-8"
+    encoding_error_handler: Literal["strict", "ignore", "replace"] = "strict"
+
+@dataclass
+class MCPServerSSEConfig(MCPServerConfig):
+    """Configuration for MCP servers using HTTP with SSE transport."""
+    url: str
+    headers: Optional[Dict[str, str]] = None
+    timeout: float = 5.0
+    sse_read_timeout: float = 300.0  # 5 minutes
+
 class MCPServersParams:
     def __init__(self, config_path: Optional[str]):
         self.config_path = config_path
@@ -35,7 +50,7 @@ class MCPServersParams:
             self.openai_client = openai.OpenAI()
 
     @property
-    def servers_params(self) -> List[MCPServerConfig]:
+    def servers_params(self) -> List[Union[MCPServerStdioConfig, MCPServerSSEConfig]]:
         """Return the list of server parameters."""
         server_configs = []
         for server_name, server_params in self._servers_params.items():
@@ -173,7 +188,7 @@ class MCPServersParams:
         with open(self.config_path, "w") as f:
             json.dump(config, f, indent=4)
 
-    def _load_servers_params(self) -> Dict[str, MCPServerConfig]:
+    def _load_servers_params(self) -> Dict[str, Union[MCPServerStdioConfig, MCPServerSSEConfig]]:
         config = self._load_user_config()
         servers = {}
         
@@ -187,34 +202,61 @@ class MCPServersParams:
                     "Please update your configuration file to include this field."
                 )
             
-            # Get command and args with defaults
-            command = server_config.get("command", None)
-            args = server_config.get("args", None)
-            
-            # Skip if command or args is None
-            if command is None or args is None:
-                raise ValueError(
-                    f"Invalid server '{mcp_name}' configuration: command or args is None. "
-                    f"Command: {command}, Args: {args}"
-                )
+            # Determine if it's a stdio or SSE config based on the presence of key fields
+            if "command" in server_config:
+                # This is a stdio config
+                command = server_config.get("command")
+                args = server_config.get("args", [])
                 
-            servers[mcp_name] = MCPServerConfig(
-                package_name=package_name,
-                command=command,
-                args=args,
-                env=server_config.get("env", {}),
-                description=server_config.get("description"),
-                tags=server_config.get("tags"),
-                repo_url=server_config.get("repo_url"),
-                setup_script=server_config.get("setup_script")
-            )
+                if command is None:
+                    raise ValueError(
+                        f"Invalid stdio server '{mcp_name}' configuration: command is None"
+                    )
+                
+                servers[mcp_name] = MCPServerStdioConfig(
+                    package_name=package_name,
+                    command=command,
+                    args=args,
+                    env=server_config.get("env", {}),
+                    cwd=server_config.get("cwd"),
+                    encoding=server_config.get("encoding", "utf-8"),
+                    encoding_error_handler=server_config.get("encoding_error_handler", "strict"),
+                    description=server_config.get("description"),
+                    tags=server_config.get("tags"),
+                    repo_url=server_config.get("repo_url"),
+                    setup_script=server_config.get("setup_script")
+                )
+            elif "url" in server_config:
+                # This is an SSE config
+                url = server_config.get("url")
+                
+                if url is None:
+                    raise ValueError(
+                        f"Invalid SSE server '{mcp_name}' configuration: url is None"
+                    )
+                
+                servers[mcp_name] = MCPServerSSEConfig(
+                    package_name=package_name,
+                    url=url,
+                    headers=server_config.get("headers"),
+                    timeout=server_config.get("timeout", 5.0),
+                    sse_read_timeout=server_config.get("sse_read_timeout", 300.0),
+                    description=server_config.get("description"),
+                    tags=server_config.get("tags"),
+                    repo_url=server_config.get("repo_url"),
+                    setup_script=server_config.get("setup_script")
+                )
+            else:
+                raise ValueError(
+                    f"Invalid server '{mcp_name}' configuration: must contain either 'command' (for stdio) or 'url' (for SSE)"
+                )
         
         return servers
     
-    def list_servers(self) -> List[MCPServerConfig]:
+    def list_servers(self) -> List[Union[MCPServerStdioConfig, MCPServerSSEConfig]]:
         return self.servers_params
     
-    def retrieve_server_params(self, server_name: str) -> MCPServerConfig:
+    def retrieve_server_params(self, server_name: str) -> Union[MCPServerStdioConfig, MCPServerSSEConfig]:
         # First check in the loaded servers
         if server_name in self._servers_params:
             return self._servers_params[server_name]
