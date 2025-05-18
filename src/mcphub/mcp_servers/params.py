@@ -15,7 +15,7 @@ from .schemas import MCPServerConfigSchema
 @dataclass
 class MCPServerConfig:
     """Base configuration class for MCP servers."""
-    package_name: str
+    package_name: str = None
     server_name: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -25,7 +25,7 @@ class MCPServerConfig:
 @dataclass
 class MCPServerStdioConfig(MCPServerConfig):
     """Configuration for MCP servers using stdio transport."""
-    command: str
+    command: str = None
     args: List[str] = None
     env: Dict[str, str] = None
     cwd: Optional[str | Path] = None
@@ -35,7 +35,7 @@ class MCPServerStdioConfig(MCPServerConfig):
 @dataclass
 class MCPServerSSEConfig(MCPServerConfig):
     """Configuration for MCP servers using HTTP with SSE transport."""
-    url: str
+    url: str = None
     headers: Optional[Dict[str, str]] = None
     timeout: float = 5.0
     sse_read_timeout: float = 300.0  # 5 minutes
@@ -193,7 +193,7 @@ class MCPServersParams:
         servers = {}
         
         for mcp_name, server_config in config.items():
-            package_name = server_config.get("package_name")
+            package_name = server_config.get("package_name") if server_config.get("package_name") else mcp_name
             
             if not package_name:
                 raise ValueError(
