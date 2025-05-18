@@ -1,27 +1,37 @@
+from mcphub.mcp_servers.params import MCPServerSSEConfig
+
 try:
     from typing import List
 
-    from autogen_ext.tools.mcp import StdioMcpToolAdapter, StdioServerParams
+    from autogen_ext.tools.mcp import (SseServerParams, StdioMcpToolAdapter,
+                                       StdioServerParams, mcp_server_tools)
 
+    from ..mcp_servers.params import MCPServerStdioConfig
     from .base import MCPBaseAdapter
 
     class MCPAutogenAdapter(MCPBaseAdapter):
         async def create_adapters(self, mcp_name: str) -> List[StdioMcpToolAdapter]:
             server_params = self.get_server_params(mcp_name)
+            autogen_mcp_server_params = None
+            if isinstance(server_params, MCPServerStdioConfig):
+                autogen_mcp_server_params = StdioServerParams(
+                    command=server_params.command,
+                    args=server_params.args,
+                    env=server_params.env,
+                    cwd=server_params.cwd
+                )
+            elif isinstance(server_params, MCPServerSSEConfig):
+                autogen_mcp_server_params = SseServerParams(
+                    url=server_params.url,
+                    headers=server_params.headers,
+                    timeout=server_params.timeout,
+                    sse_read_timeout=server_params.sse_read_timeout
+                )
+            else:
+                raise ValueError(f"Unsupported server params type: {type(server_params)}")
             
-            autogen_mcp_server_params = StdioServerParams(
-                command=server_params.command,
-                args=server_params.args,
-                env=server_params.env,
-                cwd=server_params.cwd
-            )
-
-            async with self.create_session(mcp_name) as session:
-                tools = await session.list_tools()
-                return [
-                    await StdioMcpToolAdapter.from_server_params(autogen_mcp_server_params, tool.name)
-                    for tool in tools.tools
-                ]
+            tools = await mcp_server_tools(autogen_mcp_server_params)
+            return tools
                 
 except ImportError:
     class MCPAutogenAdapter:  # type: ignore
