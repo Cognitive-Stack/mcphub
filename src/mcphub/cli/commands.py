@@ -219,7 +219,7 @@ def remove_command(args):
         else:
             show_error(
                 f"MCP server '{server_name}' not found in current configuration",
-                help_text="Use 'mcphub list' to see available servers"
+                help_text="Use 'mcphub ps' to see available servers"
             )
             # Show what's currently configured
             configured = list_configured_servers()
@@ -341,7 +341,7 @@ def status_command(args):
     if server_name not in config.get("mcpServers", {}):
         show_error(
             f"MCP server '{server_name}' not found in configuration",
-            help_text="Use 'mcphub list' to see available servers"
+            help_text="Use 'mcphub ps' to see available servers"
         )
         sys.exit(1)
     
@@ -372,7 +372,7 @@ def run_command(args):
     if server_name not in config.get("mcpServers", {}):
         show_error(
             f"MCP server '{server_name}' not found in configuration",
-            help_text="Use 'mcphub list' to see available servers"
+            help_text="Use 'mcphub ps' to see available servers"
         )
         sys.exit(1)
     
